@@ -1,0 +1,14 @@
+-- Fazenda Digital V137 - banco
+-- JÁ FOI APLICADO direto no Supabase. Este arquivo fica só como registro; não precisa rodar.
+--
+-- 1) fazendas.tipo: 'fazenda' ou 'particular' (Particular dos sócios).
+-- 2) unidade_particular(id): diz se a unidade é um Particular.
+-- 3) Plano de contas: 2.3.05.01.0003 Despesas Particulares dos Sócios e 2.3.05.01.0004 Receitas
+--    Particulares dos Sócios (Patrimônio Líquido), com os tipos de sistema particular_despesa e particular_receita.
+-- 4) fazenda_vincula_criador: Particular novo abre também para o Administrador e o Escritório.
+-- 5) salvar_acesso: Administrador e Escritório recebem sozinhos o acesso aos Particulares; gerente e funcionário nunca.
+-- 6) agenda_relacao: o Particular não tem agenda (só as fazendas).
+-- 7) resultado_caixa e exportar_contabilidade: o que é do Particular vai ao Patrimônio Líquido (fora do resultado);
+--    na exportação, o lançamento sem fazenda aparece como "Administrativo".
+-- 8) incluir_socio(particular, nome): cadastra o sócio como centro de custo do Particular
+--    (centro "pai" com o nome do Particular e um filho por sócio: 01, 01.01, 01.02...).

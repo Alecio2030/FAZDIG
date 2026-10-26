@@ -150,7 +150,7 @@ export function SessaoProvider({ children }: { children: React.ReactNode }) {
     // sem escolha gravada, abre numa fazenda (e não no Particular)
     const escolhida = lista.find((f) => f.id === salva) ?? lista.find((f) => f.tipo === 'fazenda') ?? lista[0] ?? null;
     const adm = (await AsyncStorage.getItem(CHAVE_MODO_ADM).catch(() => null)) === '1';
-    setModoAdm(adm && lista.some((f) => f.perfil === 'dono' || f.perfil === 'admin' || f.perfil === 'escritorio'));
+    setModoAdm(adm && lista.some((f) => f.perfil === 'dono' || f.perfil === 'admin' || (f.perfil === 'escritorio' && f.financeiro)));
     setFazendas(lista);
     setFazendaAtivaId(escolhida?.id ?? null);
     const [relacao] = await Promise.all([lista.length ? lerRelacaoAgendas().catch(() => []) : Promise.resolve([]), recarregarGrupo().catch(() => undefined)]);

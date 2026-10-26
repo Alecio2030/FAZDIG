@@ -39,7 +39,8 @@ export default function Capa() {
   const [gravando, setGravando] = useState(false);
   const [atualizando, setAtualizando] = useState(false);
   const dono = fazendas.some((f) => eDono(f.perfil));
-  const escritorio = fazendas.some((f) => f.perfil === 'escritorio');
+  // V154: o Administrativo só tem Financeiro e Mais; o Escritório sem acesso ao financeiro não o vê (fica só com a sua fazenda)
+  const escritorio = fazendas.some((f) => f.perfil === 'escritorio' && f.financeiro);
   const { width } = useWindowDimensions();
   // caixinhas lado a lado: 2 por linha no celular, 3 no celular deitado/tablet, 4 no PC
   const colunas = width >= 700 ? 4 : width >= 520 ? 3 : 2;

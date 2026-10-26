@@ -4,4 +4,4 @@ export const SUPABASE_URL = 'https://ultkkwvojisfgpebnhhl.supabase.co';
 export const SUPABASE_CHAVE = 'sb_publishable_sP9TZ53HT5rbGa4ah2gjtQ_FbECDhug';
 
 /** Versão do pacote (aparece no fim da tela Mais, para conferir o que está instalado). */
-export const VERSAO_APP = 'V153';
+export const VERSAO_APP = 'V154';

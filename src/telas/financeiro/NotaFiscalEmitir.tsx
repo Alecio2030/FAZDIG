@@ -9,6 +9,7 @@ import Escolha from '../../componentes/Escolha';
 import Secao from '../../componentes/Secao';
 import { useSessao } from '../../contexto/SessaoContext';
 import { supabase } from '../../lib/supabase';
+import { palpiteNcm } from '../../lib/ncm';
 import { CSOSN, CST_ICMS, FRETE, PAGAMENTO, chamarNfe } from '../../lib/nfe';
 import { formatarMoeda, formatarQtd, lerNumero, mascaraCep, mascaraCpfCnpj, numeroParaCampo, somenteDigitos } from '../../lib/formatos';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
@@ -50,6 +51,19 @@ export default function NotaFiscalEmitir() {
 
   useEffect(() => {
     (async () => {
+      // V159: a GTA e a fazenda do cliente vêm da venda
+      const { data: vg } = await supabase
+        .from('vendas')
+        .select('fazenda_id, gta_numero, gta_serie, gta_uf, fazenda:fazendas ( nome ), faturamento:pessoas_faturamento ( nome_fazenda, inscricao_sanitaria )')
+        .eq('id', params.vendaId)
+        .maybeSingle();
+      const vv = vg as any;
+      // V160: a nota só sai pela fazenda em que o sistema está aberto
+      if (vv && vv.fazenda_id !== fazendaAtiva?.id) {
+        setCarregando(false);
+        const fz = Array.isArray(vv.fazenda) ? vv.fazenda[0] : vv.fazenda;
+        return setErro(`Esta venda é de ${fz?.nome ?? 'outra fazenda'}. A NF-e só sai pela fazenda em que o sistema está aberto: troque para ela na capa.`);
+      }
       const r = await chamarNfe<any>({ acao: 'previa', venda_id: params.vendaId });
       setCarregando(false);
       if ('erro' in r && r.erro) return setErro(r.erro);
@@ -68,18 +82,12 @@ export default function NotaFiscalEmitir() {
       setItens(
         (n.itens ?? []).map((it: any) => ({
           ...it,
+          ncm: it.ncm || palpiteNcm(it.descricao ?? ''), // V160: mamão, banana, milho... já vêm com o NCM provável
           info: it.info ?? '',
           aliquota: numeroParaCampo(it.aliquota_icms),
           reducao: numeroParaCampo(it.reducao_bc),
         })),
       );
-      // V159: a GTA e a fazenda do cliente vêm da venda
-      const { data: vg } = await supabase
-        .from('vendas')
-        .select('gta_numero, gta_serie, gta_uf, faturamento:pessoas_faturamento ( nome_fazenda, inscricao_sanitaria )')
-        .eq('id', params.vendaId)
-        .maybeSingle();
-      const vv = vg as any;
       setGta(
         n.gta
           ? { numero: vv?.gta_numero ?? n.gta.numero ?? '', serie: vv?.gta_serie ?? n.gta.serie ?? '', uf: vv?.gta_uf ?? n.gta.uf ?? '' }
@@ -100,7 +108,7 @@ export default function NotaFiscalEmitir() {
       setTPag(n.pagamento?.tipo ?? '99');
       setInfo([n.info_complementar ?? '', sanit].filter((x) => x.trim()).join(' '));
     })();
-  }, [params.vendaId, navegacao]);
+  }, [params.vendaId, navegacao, fazendaAtiva?.id]);
 
   const mudarItem = (i: number, m: Partial<ItemTela>) => setItens((l) => l.map((x, k) => (k === i ? { ...x, ...m } : x)));
   const total = itens.reduce((t, it) => t + Number(it.valor_total), 0);

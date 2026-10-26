@@ -52,6 +52,15 @@ const FAIXAS = [
 let cont = 0;
 const chave = () => `v${Date.now()}_${cont++}`;
 const n = (t: string) => lerNumero(t);
+const UNIDADES_OUTRO = [
+  { valor: 'un', rotulo: 'Unidade' },
+  { valor: 'kg', rotulo: 'kg' },
+  { valor: 'cx', rotulo: 'Caixa' },
+  { valor: 'sc', rotulo: 'Saca' },
+  { valor: 't', rotulo: 'Tonelada' },
+  { valor: 'dz', rotulo: 'Dúzia' },
+  { valor: 'l', rotulo: 'Litro' },
+];
 const itemVazio = (): Item => ({ chave: chave(), tipo: 'outro', insumoId: null, unidade: 'un', descricao: '', qtd: '1', unit: '', total: '' });
 
 /** Mais › Vendas: animais (dá baixa no rebanho) e outros produtos e serviços. Gera o contas a receber. */
@@ -98,6 +107,7 @@ export default function VendaForm() {
       .catch(() => setFazCliente([]));
   }, [pessoaId]);
   const [documento, setDocumento] = useState('');
+  const [docSerie, setDocSerie] = useState('');
   // animais
   const [numPesagem, setNumPesagem] = useState('');
   const [pesagem, setPesagem] = useState<{ id: string; numero: number; texto: string; porBrinco: boolean } | null>(null);
@@ -435,6 +445,7 @@ export default function VendaForm() {
       data: iso,
       pessoa_id: pessoaId,
       numero_documento: documento,
+      documento_serie: docSerie,
       conta_contabil_id: null, // classificação automática: o banco define pelo tipo da venda (bovinos, café ou outras receitas)
       conta_bancaria_id: bancoId,
       forma_pagamento: pagto[0],
@@ -479,7 +490,7 @@ export default function VendaForm() {
             insumo_id: i.tipo === 'insumo' ? i.insumoId : null,
             descricao: i.descricao,
             quantidade: n(i.qtd) ?? 1,
-            unidade: i.tipo === 'insumo' ? i.unidade : 'un',
+            unidade: i.unidade || 'un',
             valor_unitario: n(i.unit) ?? '',
             valor_total: n(i.total),
           })),
@@ -501,13 +512,26 @@ export default function VendaForm() {
       ? ` Contrato nº ${contratoAtivo.numero}: ${Number(res.saldo_sacas ?? 0) > 0 ? `faltam ${textoSacas(Number(res.saldo_sacas))}` : 'concluído'}${comp > 0 ? `; ${formatarMoeda(comp)} ${contratoAtivo.tipo === 'troca' ? 'quitaram a compra dos insumos' : 'foram abatidos do adiantamento'} sem movimentar dinheiro; fica a receber ${formatarMoeda(Math.max(0, Number(res.liquido) - comp))}` : ''}.`
       : '';
     const receber = parcelas.length === 1 ? '1 título no contas a receber' : `${parcelas.length} parcelas no contas a receber`;
-    navegacao.replace('VendaForm', {
-      aviso: deAnimais
+    const textoAviso = deAnimais
         ? `Venda nº ${res.numero} gravada: ${formatarNumero(res.cabecas ?? cab)} ${(res.cabecas ?? cab) === 1 ? 'cabeça saiu' : 'cabeças saíram'} ${origem[0] === 'faixa' || !lote ? 'do rebanho' : `do lote ${codigoLote(lote.numero, sigla)}`}, ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`
         : deCafe
           ? `Venda nº ${res.numero} gravada: ${textoSacas(sacasCafe)} de café saíram do armazém, ${formatarMoeda(Number(res.liquido))} ${comp > 0 ? 'no total' : 'a receber'} (${receber}).${textoContrato}`
-          : `Venda nº ${res.numero} gravada: ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`,
-    });
+          : `Venda nº ${res.numero} gravada: ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`;
+    // V160: ao fechar a venda, pergunta se emite a NF-e agora (se já tem o nº da nota, foi emitida fora)
+    if (documento.trim()) return navegacao.replace('VendaForm', { aviso: textoAviso });
+    let vendaId: string | null = (r as any)?.id ?? null;
+    if (!vendaId) {
+      const { data: vx } = await supabase.from('vendas').select('id').eq('fazenda_id', fid!).eq('numero', res.numero).maybeSingle();
+      vendaId = (vx as any)?.id ?? null;
+    }
+    Alert.alert('EMITIR NF?', `Venda nº ${res.numero} gravada. Quer emitir a NF-e desta venda agora?`, [
+      {
+        text: 'Agora não',
+        style: 'cancel',
+        onPress: () => navegacao.replace('VendaForm', { aviso: `${textoAviso} Para emitir a nota depois: Mais › Notas fiscais › Emitir NF-e de uma venda, com o nº ${res.numero}.` }),
+      },
+      { text: 'Emitir NF', onPress: () => (vendaId ? navegacao.replace('NotaFiscalEmitir', { vendaId }) : navegacao.replace('VendaForm', { aviso: textoAviso })) },
+    ]);
   }
 
   // ---- excluir uma venda já lançada (não se altera: exclui e lança de novo) ----
@@ -589,7 +613,7 @@ export default function VendaForm() {
         opcoes={[
           { valor: 'animais', rotulo: 'Animais' },
           { valor: 'cafe', rotulo: 'Café' },
-          { valor: 'outros', rotulo: 'Outros produtos e serviços' },
+          { valor: 'outros', rotulo: 'Outros produtos (mamão, banana, milho...) e serviços' },
         ]}
         valor={tipo}
         aoMudar={setTipo}
@@ -604,7 +628,16 @@ export default function VendaForm() {
           aoMudar={(v) => setFatId(v[0] ?? null)}
         />
       )}
-      <Campo rotulo={deAnimais ? 'Nº da nota / GTA' : 'Nº da nota / documento'} value={documento} onChangeText={setDocumento} autoCapitalize="characters" />
+      {/* V160: número e série da Nota Fiscal (não obrigatório: se a NF-e for emitida por aqui, o número entra sozinho) */}
+      <View style={estilos.linha}>
+        <View style={{ flex: 2 }}>
+          <Campo rotulo="Nº da Nota Fiscal" value={documento} onChangeText={(t) => setDocumento(t.replace(/\D/g, ''))} keyboardType="number-pad" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Campo rotulo="Série" value={docSerie} onChangeText={(t) => setDocSerie(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
+        </View>
+      </View>
+      <Text style={estilos.nota}>Se ainda não tem a nota, deixe em branco: ao gravar, o sistema pergunta se quer emitir a NF-e agora, e o número entra sozinho.</Text>
 
       {deAnimais ? (
         <>
@@ -918,7 +951,7 @@ export default function VendaForm() {
               </View>
               <Escolha
                 opcoes={[
-                  { valor: 'outro', rotulo: 'Serviço / outro' },
+                  { valor: 'outro', rotulo: 'Produto da fazenda / serviço' },
                   { valor: 'insumo', rotulo: 'Produto do estoque' },
                 ]}
                 valor={[it.tipo]}
@@ -938,7 +971,19 @@ export default function VendaForm() {
                   <Text style={estilos.nota}>Sai do estoque ao gravar.</Text>
                 </>
               ) : (
-                <Campo rotulo="Descrição *" value={it.descricao} onChangeText={(t) => mudar(it.chave, { descricao: t })} autoCapitalize="sentences" placeholder="Ex.: Sucata, serviço de trator, esterco" erro={erros[`p${k}`]} />
+                <>
+                  <Campo rotulo="O que vendeu *" value={it.descricao} onChangeText={(t) => mudar(it.chave, { descricao: t })} autoCapitalize="sentences" placeholder="Ex.: Mamão formosa, banana prata, milho em grão, serviço de trator" erro={erros[`p${k}`]} />
+                  {/* V160: produto da fazenda com quantidade e unidade (vão para a nota fiscal) */}
+                  <Escolha rotulo="Unidade" opcoes={UNIDADES_OUTRO} valor={[it.unidade]} aoMudar={(v) => mudar(it.chave, { unidade: v[0] ?? 'un' })} />
+                  <View style={estilos.linha}>
+                    <View style={{ flex: 1 }}>
+                      <Campo rotulo={`Qtde. (${it.unidade})`} value={it.qtd} onChangeText={(t) => mudarQtdOuUnit(it, 'qtd', t)} keyboardType="decimal-pad" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <CampoMoeda rotulo="R$ unitário" valor={it.unit} aoMudar={(t) => mudarQtdOuUnit(it, 'unit', t)} />
+                    </View>
+                  </View>
+                </>
               )}
               <CampoMoeda rotulo="Valor (R$) *" valor={it.total} aoMudar={(t) => mudar(it.chave, { total: t })} erro={erros[`t${k}`]} />
             </View>

@@ -139,7 +139,8 @@ export default function VendaDetalhe() {
           Entrega do contrato de café nº {um(v.contrato).numero} ({um(v.contrato).tipo === 'troca' ? 'troca por insumos' : 'venda futura'}) ›
         </Text>
       ) : null}
-      <Dado rotulo={v.tipo === 'animais' ? 'Nº da nota / GTA' : 'Nº da nota / documento'} valor={v.numero_documento} />
+      <Dado rotulo="Nota Fiscal" valor={v.numero_documento ? `nº ${v.numero_documento}${v.documento_serie ? ` série ${v.documento_serie}` : ''}` : null} />
+      {v.tipo === 'animais' ? <Dado rotulo="GTA" valor={v.gta_numero ? `nº ${v.gta_numero}${v.gta_serie ? ` série ${v.gta_serie}` : ''}${v.gta_uf ? `/${v.gta_uf}` : ''}` : null} /> : null}
 
       {v.tipo === 'animais' ? (
         <>
@@ -264,9 +265,13 @@ export default function VendaDetalhe() {
           ))}
         </Lista>
       ) : null}
-      {!notas.some((n) => n.situacao === 'autorizada') && (
-        <Botao titulo={notas.length ? 'Emitir a NF-e desta venda' : 'Emitir NF-e'} onPress={() => navegacao.push('NotaFiscalEmitir', { vendaId: v.id })} />
-      )}
+      {/* V160: a nota só sai pela fazenda em que o sistema está aberto */}
+      {!notas.some((n) => n.situacao === 'autorizada') &&
+        (v.fazenda_id === fazendaAtiva?.id ? (
+          <Botao titulo={notas.length ? 'Emitir a NF-e desta venda' : 'Emitir NF-e'} onPress={() => navegacao.push('NotaFiscalEmitir', { vendaId: v.id })} />
+        ) : (
+          <Aviso tipo="info" texto={`Esta venda é de ${um(v.fazenda)?.nome ?? 'outra fazenda'}. A NF-e só sai pela fazenda em que o sistema está aberto: troque para ela na capa.`} />
+        ))}
 
       <Secao titulo="Outros" />
       <Dado rotulo="Observações" valor={v.observacoes} />

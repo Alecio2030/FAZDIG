@@ -43,7 +43,7 @@ export const CSOSN = [
 ];
 
 /** Chama a função "nfe" e devolve os dados, ou { erro } com a mensagem que o servidor mandou. */
-export async function chamarNfe<T = any>(corpo: Record<string, unknown>): Promise<T & { erro?: undefined } | { erro: string }> {
+export async function chamarNfe<T = any>(corpo: Record<string, unknown>): Promise<(T & { erro?: undefined }) | { erro: string }> {
   const { data, error } = await supabase.functions.invoke('nfe', { body: corpo });
   if (error) {
     let msg = 'Não foi possível falar com o servidor agora. Tente de novo.';
@@ -55,7 +55,7 @@ export async function chamarNfe<T = any>(corpo: Record<string, unknown>): Promis
     }
     return { erro: msg };
   }
-  return data as T;
+  return data as T & { erro?: undefined };
 }
 
 /** Chave de acesso em grupos de 4 números, como no DANFE. */

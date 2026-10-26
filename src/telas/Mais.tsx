@@ -23,13 +23,15 @@ export default function Mais() {
   const chefe = eDono(fazendaAtiva?.perfil);
   // sem o módulo "Mais" liberado, a pessoa vê só a Agenda, a troca de senha e o Sair
   const verMais = podeModulo(fazendaAtiva, 'mais');
-  // V139: Compras, Imobilizado e Vendas vieram do Financeiro: só para quem tem o Financeiro liberado
-  // (mesmo sem o módulo "Mais"); no Administrativo e no Particular saem as que só existem nas fazendas
+  // V139: Compras, Imobilizado e Vendas vieram do Financeiro (quem tem o Financeiro as vê mesmo sem o módulo "Mais").
+  // V155: são operação da fazenda, então quem tem o "Mais" também as vê, mesmo sem o Financeiro;
+  // sem o Financeiro saem só Usuários e Auditoria (e a Cópia de segurança), que são do Produtor.
+  // No Administrativo e no Particular saem as que só existem nas fazendas.
   const verFinanceiro = fazendaAtiva?.financeiro !== false;
   const fora = modoAdm ? FORA_ADM : fazendaAtiva?.tipo === 'particular' ? FORA_PARTICULAR : [];
   const funcoes = MODULOS.mais.funcoes.filter((f) =>
     f.soFinanceiro
-      ? verFinanceiro && !fora.includes(f.chave)
+      ? (verFinanceiro || verMais) && !fora.includes(f.chave)
       : (!f.soDono || chefe) && (verMais || f.chave === 'agenda'));
 
   return (

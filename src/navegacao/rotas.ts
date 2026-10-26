@@ -90,6 +90,8 @@ export type PilhaParams = {
   RegistroLancamentos: undefined;
   /** Cópias de segurança: a automática da semana, a feita na hora e o arquivo para guardar */
   CopiaSeguranca: undefined;
+  /** V156: NF-e por fazenda — dados fiscais, certificado A1, numeração, ambiente e teste com a Sefaz */
+  NotaFiscalConfig: undefined;
   SafraDetalhe: { id: string };
   /** Colheitas: abas Lançar | Pagamento (vales e fechamento dos colhedores) | Consultar */
   ColheitaForm: { areaId?: string; aba?: 'lancar' | 'pagamento' | 'consultar'; aviso?: string; abrirId?: string } | undefined;

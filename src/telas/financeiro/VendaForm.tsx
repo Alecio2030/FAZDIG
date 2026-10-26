@@ -39,6 +39,14 @@ type Item = { chave: string; tipo: 'outro' | 'insumo'; insumoId: string | null; 
 type Rateio = { chave: string; centroId: string | null; perc: string };
 type Parcela = { chave: string; venc: string; valor: string };
 type InfoLote = { id: string; numero: number; descricao: string | null; cabecas: number };
+type Faixa = { sexo: 'M' | 'F'; faixa: string; idade_de: number; idade_ate: number | null; cabecas: number };
+const FAIXAS_ATE: Record<string, number | null> = { '0': 12, '13': 24, '25': 36, '37': null };
+const FAIXAS = [
+  { valor: '0', rotulo: '0 a 12 meses' },
+  { valor: '13', rotulo: '13 a 24 meses' },
+  { valor: '25', rotulo: '25 a 36 meses' },
+  { valor: '37', rotulo: 'acima de 36 meses' },
+];
 
 let cont = 0;
 const chave = () => `v${Date.now()}_${cont++}`;
@@ -75,6 +83,12 @@ export default function VendaForm() {
   const [pesagem, setPesagem] = useState<{ id: string; numero: number; texto: string; porBrinco: boolean } | null>(null);
   const [puxando, setPuxando] = useState(false);
   const [lote, setLote] = useState<InfoLote | null>(null);
+  // V158: de onde saem os animais: de um lote, ou do rebanho da fazenda pelo sexo e faixa de idade (quem não controla por lote)
+  const [origem, setOrigem] = useState<string[]>(['lote']);
+  const [lotesAtivos, setLotesAtivos] = useState<ItemLista[] | null>(null);
+  const [estoque, setEstoque] = useState<Faixa[] | null>(null);
+  const [sexo, setSexo] = useState<string[]>([]);
+  const [faixa, setFaixa] = useState<string[]>([]);
   const [modo, setModo] = useState<string[]>(['quantidade']);
   const [quantidade, setQuantidade] = useState('');
   const [animais, setAnimais] = useState<string[]>([]);
@@ -232,6 +246,22 @@ export default function VendaForm() {
     const d = await consulta<any[]>(supabase.from('lotes').select('id, numero, descricao, sexo').eq('fazenda_id', fid!).eq('situacao', 'ativo').order('numero'));
     return d.map((l) => ({ id: l.id, titulo: nomeLote(l, sigla), detalhe: l.sexo === 'M' ? 'Lote de machos' : l.sexo === 'F' ? 'Lote de fêmeas' : 'Sexo não definido' }));
   }, [fid, sigla]);
+  // V158: os lotes aparecem na própria tela (sem abrir outra página) e o estoque por sexo e faixa de idade
+  useEffect(() => {
+    if (!deAnimais || !fid) return;
+    carregarLotes()
+      .then((l) => {
+        setLotesAtivos(l);
+        // sem lote nenhum: já abre pelo rebanho (sexo e idade)
+        if (!l.length) setOrigem(['faixa']);
+      })
+      .catch(() => setLotesAtivos([]));
+    supabase.rpc('estoque_gado_faixas', { p_fazenda: fid }).then(({ data }) => setEstoque(((data ?? []) as Faixa[])));
+  }, [deAnimais, fid, carregarLotes]);
+  const faixaEscolhida = estoque?.find((x) => x.sexo === sexo[0] && String(x.idade_de) === faixa[0]) ?? null;
+  const estoqueFaixa = (sx: string, de: string) => estoque?.find((x) => x.sexo === sx && String(x.idade_de) === de)?.cabecas ?? 0;
+  const totalSexo = (sx: string) => (estoque ?? []).filter((x) => x.sexo === sx).reduce((t, x) => t + x.cabecas, 0);
+
   async function escolherLote(id: string | null) {
     setAnimais([]);
     setLote(id ? await lerLote(id).catch(() => null) : null);
@@ -267,7 +297,10 @@ export default function VendaForm() {
       setQuantidade(String(cabP));
       setPeso(numeroParaCampo(kg));
       if (Number(x.peso_arroba) > 0) setKgArroba(numeroParaCampo(x.peso_arroba));
-      if (x.lote_id) await escolherLote(x.lote_id);
+      if (x.lote_id) {
+        setOrigem(['lote']);
+        await escolherLote(x.lote_id);
+      }
       if (x.destino_pessoa_id) setPessoaId(x.destino_pessoa_id);
       setPesagem({
         id: x.id,
@@ -327,8 +360,15 @@ export default function VendaForm() {
     if (!pessoaId) e.pessoa = 'Informe o cliente.';
     else if (contratoAtivo && pessoaId !== contratoAtivo.pessoa_id) e.pessoa = `O cliente tem de ser o do contrato: ${contratoAtivo.pessoa_nome}.`;
     if (deAnimais) {
-      if (!lote) e.lote = 'Escolha o lote de onde saem os animais.';
-      if (modo[0] === 'quantidade') {
+      const doRebanho = origem[0] === 'faixa';
+      if (!doRebanho && !lote) e.lote = 'Escolha o lote de onde saem os animais (ou "Do rebanho, por sexo e idade").';
+      if (doRebanho) {
+        if (!sexo.length) e.sexo = 'Informe o sexo dos animais.';
+        if (!faixa.length) e.faixa = 'Informe a faixa de idade.';
+        if (!Number.isInteger(cab) || cab < 1) e.quantidade = 'Informe a quantidade de cabeças.';
+        else if (sexo.length && faixa.length && cab > estoqueFaixa(sexo[0], faixa[0]))
+          e.quantidade = `No rebanho há ${formatarNumero(estoqueFaixa(sexo[0], faixa[0]))} ${sexo[0] === 'M' ? 'machos' : 'fêmeas'} de ${FAIXAS.find((f) => f.valor === faixa[0])?.rotulo}. Lance a entrada dos animais antes (Pecuário › Movimentações).`;
+      } else if (modo[0] === 'quantidade') {
         if (!Number.isInteger(cab) || cab < 1) e.quantidade = 'Informe a quantidade de cabeças.';
         else if (lote && cab > lote.cabecas) e.quantidade = `O lote só tem ${formatarNumero(lote.cabecas)} cabeças.`;
       } else if (!animais.length) e.animais = 'Marque pelo menos um animal.';
@@ -380,9 +420,12 @@ export default function VendaForm() {
       observacoes: obs,
       animais: deAnimais
         ? {
-            lote_origem: lote!.id,
-            quantidade: modo[0] === 'quantidade' ? cab : 0,
-            animais: modo[0] === 'quantidade' ? [] : animais,
+            lote_origem: origem[0] === 'faixa' ? '' : lote!.id,
+            quantidade: origem[0] === 'faixa' || modo[0] === 'quantidade' ? cab : 0,
+            animais: origem[0] === 'faixa' || modo[0] === 'quantidade' ? [] : animais,
+            sexo: origem[0] === 'faixa' ? sexo[0] : '',
+            idade_de: origem[0] === 'faixa' ? faixa[0] : '',
+            idade_ate: origem[0] === 'faixa' ? String(FAIXAS_ATE[faixa[0]] ?? '') : '',
             pesagem: pesagem?.id ?? '',
             peso_bruto: n(peso) ?? '',
             forma_preco: formaPreco,
@@ -435,7 +478,7 @@ export default function VendaForm() {
     const receber = parcelas.length === 1 ? '1 título no contas a receber' : `${parcelas.length} parcelas no contas a receber`;
     navegacao.replace('VendaForm', {
       aviso: deAnimais
-        ? `Venda nº ${res.numero} gravada: ${formatarNumero(res.cabecas ?? cab)} ${(res.cabecas ?? cab) === 1 ? 'cabeça saiu' : 'cabeças saíram'} do lote ${codigoLote(lote!.numero, sigla)}, ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`
+        ? `Venda nº ${res.numero} gravada: ${formatarNumero(res.cabecas ?? cab)} ${(res.cabecas ?? cab) === 1 ? 'cabeça saiu' : 'cabeças saíram'} ${origem[0] === 'faixa' || !lote ? 'do rebanho' : `do lote ${codigoLote(lote.numero, sigla)}`}, ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`
         : deCafe
           ? `Venda nº ${res.numero} gravada: ${textoSacas(sacasCafe)} de café saíram do armazém, ${formatarMoeda(Number(res.liquido))} ${comp > 0 ? 'no total' : 'a receber'} (${receber}).${textoContrato}`
           : `Venda nº ${res.numero} gravada: ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`,
@@ -558,39 +601,99 @@ export default function VendaForm() {
               texto={`Pesagem nº ${pesagem.numero}: ${pesagem.texto} Lote, cabeças e peso foram preenchidos.${pesagem.porBrinco ? ' Como todas as pesadas têm brinco de animais do lote, saem exatamente esses.' : ''}`}
             />
           )}
-          <SeletorLista rotulo="Lote de origem *" valorId={lote?.id ?? null} aoMudar={escolherLote} carregar={carregarLotes} erro={erros.lote} vazio="Nenhum lote ativo. Abra em Pecuário › Lotes." />
-          {lote && (
+          <Escolha
+            rotulo="De onde saem os animais"
+            opcoes={[
+              { valor: 'lote', rotulo: 'De um lote' },
+              { valor: 'faixa', rotulo: 'Do rebanho, por sexo e idade' },
+            ]}
+            valor={origem}
+            aoMudar={(v) => {
+              setOrigem(v);
+              if (v[0] === 'faixa') {
+                escolherLote(null);
+                setModo(['quantidade']);
+              }
+            }}
+          />
+          {origem[0] === 'lote' ? (
             <>
-              <Text style={estilos.nota}>
-                {formatarNumero(lote.cabecas)} {lote.cabecas === 1 ? 'cabeça' : 'cabeças'} no lote agora.
-              </Text>
-              <Escolha
-                rotulo="Quais animais"
-                opcoes={[
-                  { valor: 'quantidade', rotulo: 'Por quantidade' },
-                  { valor: 'escolher', rotulo: 'Escolher os animais' },
-                ]}
-                valor={modo}
-                aoMudar={(v) => {
-                  setModo(v);
-                  if (v[0] === 'escolher' && pesagem) {
-                    setPesagem(null);
-                    setNumPesagem('');
-                  }
-                }}
-              />
-              {modo[0] === 'quantidade' ? (
-                <Campo
-                  rotulo="Quantidade de cabeças *"
-                  value={quantidade}
-                  onChangeText={(t) => setQuantidade(t.replace(/\D/g, '').slice(0, 4))}
-                  keyboardType="number-pad"
-                  ajuda={pesagem ? undefined : 'O sistema tira primeiro os sem brinco e, entre eles, os de número mais alto.'}
-                  erro={erros.quantidade}
+              {lotesAtivos === null ? null : lotesAtivos.length ? (
+                <Escolha
+                  rotulo="Lote de origem *"
+                  opcoes={lotesAtivos.map((l) => ({ valor: l.id, rotulo: l.titulo }))}
+                  valor={lote ? [lote.id] : []}
+                  aoMudar={(v) => escolherLote(v[0] ?? null)}
+                  erro={erros.lote}
                 />
               ) : (
-                <SeletorAnimais loteId={lote.id} valor={animais} aoMudar={setAnimais} erro={erros.animais} />
+                <Aviso tipo="info" texto='Nenhum lote ativo nesta fazenda. Use "Do rebanho, por sexo e idade".' />
               )}
+            {lote && (
+              <>
+                <Text style={estilos.nota}>
+                  {formatarNumero(lote.cabecas)} {lote.cabecas === 1 ? 'cabeça' : 'cabeças'} no lote agora.
+                </Text>
+                <Escolha
+                  rotulo="Quais animais"
+                  opcoes={[
+                    { valor: 'quantidade', rotulo: 'Por quantidade' },
+                    { valor: 'escolher', rotulo: 'Escolher os animais' },
+                  ]}
+                  valor={modo}
+                  aoMudar={(v) => {
+                    setModo(v);
+                    if (v[0] === 'escolher' && pesagem) {
+                      setPesagem(null);
+                      setNumPesagem('');
+                    }
+                  }}
+                />
+                {modo[0] === 'quantidade' ? (
+                  <Campo
+                    rotulo="Quantidade de cabeças *"
+                    value={quantidade}
+                    onChangeText={(t) => setQuantidade(t.replace(/\D/g, '').slice(0, 4))}
+                    keyboardType="number-pad"
+                    ajuda={pesagem ? undefined : 'O sistema tira primeiro os sem brinco e, entre eles, os de número mais alto.'}
+                    erro={erros.quantidade}
+                  />
+                ) : (
+                  <SeletorAnimais loteId={lote.id} valor={animais} aoMudar={setAnimais} erro={erros.animais} />
+                )}
+              </>
+            )}
+            </>
+          ) : (
+            <>
+              {estoque !== null && !estoque.length ? (
+                <Aviso tipo="erro" texto="Não há gado no rebanho desta fazenda. Lance a entrada dos animais (Pecuário › Movimentações: nascimento, compra ou estoque inicial) antes de vender." />
+              ) : null}
+              <Escolha
+                rotulo="Sexo *"
+                opcoes={[
+                  { valor: 'M', rotulo: `Machos (${formatarNumero(totalSexo('M'))})` },
+                  { valor: 'F', rotulo: `Fêmeas (${formatarNumero(totalSexo('F'))})` },
+                ]}
+                valor={sexo}
+                aoMudar={setSexo}
+                erro={erros.sexo}
+              />
+              <Escolha
+                rotulo="Faixa de idade *"
+                opcoes={FAIXAS.map((f) => ({ valor: f.valor, rotulo: sexo.length ? `${f.rotulo} (${formatarNumero(estoqueFaixa(sexo[0], f.valor))})` : f.rotulo }))}
+                valor={faixa}
+                aoMudar={setFaixa}
+                erro={erros.faixa}
+              />
+              <Campo
+                rotulo="Quantidade de cabeças *"
+                value={quantidade}
+                onChangeText={(t) => setQuantidade(t.replace(/\D/g, '').slice(0, 4))}
+                keyboardType="number-pad"
+                ajuda={faixaEscolhida ? `${formatarNumero(faixaEscolhida.cabecas)} no estoque nessa faixa. O sistema tira primeiro os sem brinco.` : sexo.length && faixa.length ? 'Não há estoque nessa faixa.' : undefined}
+                erro={erros.quantidade}
+              />
             </>
           )}
 

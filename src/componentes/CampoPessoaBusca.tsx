@@ -1,4 +1,7 @@
 import React, { useCallback } from 'react';
+import { useNavigation } from '@react-navigation/native';
+import type { NavPilha } from '../navegacao/rotas';
+import { aguardarPessoaNova } from '../lib/retorno';
 import CampoBuscaRapida, { type ItemRapido } from './CampoBuscaRapida';
 import { consulta, supabase } from '../lib/supabase';
 import { ROTULO_TIPO_PESSOA } from '../lib/pessoas';
@@ -30,6 +33,15 @@ export default function CampoPessoaBusca({ rotulo, valorId, aoMudar, tipoNovo, e
     [tipoNovo],
   );
   const lerNome = useCallback(async (id: string) => (await supabase.from('pessoas').select('nome').eq('id', id).maybeSingle()).data?.nome ?? null, []);
+  // V158: "Cadastrar" abre a ficha completa da pessoa (CPF/CNPJ, endereço, IE...); ao salvar, volta para esta tela com ela escolhida
+  const navegacao = useNavigation<NavPilha>();
+  const pedirNovo = useCallback(
+    (nome: string) => {
+      aguardarPessoaNova(aoMudar);
+      navegacao.push('PessoaForm', { novo: { nome, tipo: tipoNovo } });
+    },
+    [aoMudar, navegacao, tipoNovo],
+  );
   const criar = useCallback(
     async (nome: string): Promise<ItemRapido> => {
       const d = await consulta<any>(supabase.from('pessoas').insert({ nome, tipos: [tipoNovo] }).select('id, nome').single());
@@ -45,6 +57,7 @@ export default function CampoPessoaBusca({ rotulo, valorId, aoMudar, tipoNovo, e
       buscar={buscar}
       lerNome={lerNome}
       criar={criar}
+      aoPedirNovo={pedirNovo}
       rotuloNovo={`novo ${ROTULO_TIPO_PESSOA[tipoNovo]?.toLowerCase() ?? tipoNovo}`}
       icone="person"
       placeholder="Digite o nome para buscar ou cadastrar"

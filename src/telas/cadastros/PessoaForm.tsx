@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Alert } from '../../lib/alerta';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { entregarPessoaNova } from '../../lib/retorno';
 import Tela from '../../componentes/Tela';
 import Campo from '../../componentes/Campo';
 import Botao from '../../componentes/Botao';
@@ -64,7 +65,8 @@ export default function PessoaForm() {
   const { params } = useRoute<RouteProp<PilhaParams, 'PessoaForm'>>();
   const id = params?.id;
   const [aba, setAba] = useState<Aba>(params?.aba ?? 'cadastrar');
-  const [f, setF] = useState<Form>(VAZIO);
+  // V158: cadastro pedido de outra tela já vem com o nome digitado e o tipo (ex.: cliente)
+  const [f, setF] = useState<Form>(() => (params?.novo ? { ...VAZIO, nome: params.novo.nome, tipos: [params.novo.tipo] } : VAZIO));
   const [carregando, setCarregando] = useState(!!id);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -177,12 +179,14 @@ export default function PessoaForm() {
       mo_base: valorMo ? f.mo_base : null,
       mo_valor: valorMo,
     };
-    const { error } = id
-      ? await supabase.from('pessoas').update(registro).eq('id', id)
-      : await supabase.from('pessoas').insert(registro);
+    const { data: gravada, error } = id
+      ? await supabase.from('pessoas').update(registro).eq('id', id).select('id').single()
+      : await supabase.from('pessoas').insert(registro).select('id').single();
     setSalvando(false);
     if (error) return setErro(traduzirErro(error));
-    if (id) navegacao.goBack();
+    if (id) return navegacao.goBack();
+    // V158: veio de outra tela (ex.: Venda): volta para ela já com a pessoa escolhida
+    if (params?.novo && gravada?.id && entregarPessoaNova(gravada.id)) return navegacao.goBack();
     else navegacao.replace('PessoaForm', eBanco ? { banco: true, aviso: `Banco ${registro.nome} salvo. Pode cadastrar o próximo.` } : { aviso: `Cadastro de ${registro.nome} salvo. Pode cadastrar a próxima pessoa.` });
   }
 

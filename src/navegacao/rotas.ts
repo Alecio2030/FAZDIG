@@ -27,7 +27,8 @@ export type PilhaParams = {
   // Etapa 2: cadastros de base
   // Padrão das telas: sem id abre nas abas Cadastrar | Consultar;
   // "aviso" é a mensagem de sucesso depois de cadastrar.
-  PessoaForm: { id?: string; banco?: boolean } & Abertura;
+  /** novo (V158): cadastro pedido de outra tela (ex.: cliente na Venda); ao salvar, volta para ela com a pessoa escolhida */
+  PessoaForm: { id?: string; banco?: boolean; novo?: { nome: string; tipo: string } } & Abertura;
   FazendaForm: { id?: string } & Abertura;
   ProdutorForm: undefined;
   UsuarioForm: { email?: string } & Abertura;

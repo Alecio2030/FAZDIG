@@ -16,6 +16,7 @@ import SeletorLista, { type ItemLista } from '../../componentes/SeletorLista';
 import SeletorAnimais from '../../componentes/SeletorAnimais';
 import CampoBuscaRapida, { type ItemRapido } from '../../componentes/CampoBuscaRapida';
 import CampoPessoaBusca from '../../componentes/CampoPessoaBusca';
+import { lerFazendasCliente, type FazendaCliente } from '../../componentes/FazendasCliente';
 import AbasCadastro, { type Aba } from '../../componentes/AbasCadastro';
 import ConsultaVendas from './ConsultaVendas';
 import { useSessao } from '../../contexto/SessaoContext';
@@ -66,10 +67,13 @@ export default function VendaForm() {
     if (!fid) return;
     supabase
       .from('fazendas')
-      .select('nome, razao_social, cpf_cnpj')
+      .select('nome, razao_social, cpf_cnpj, uf')
       .eq('id', fid)
       .maybeSingle()
-      .then(({ data }) => setFaturadoPor((data as any)?.cpf_cnpj ? `${(data as any).razao_social ?? (data as any).nome} · ${(data as any).cpf_cnpj}` : null));
+      .then(({ data }) => {
+        setGtaUf((u) => u || String((data as any)?.uf ?? '').trim().toUpperCase());
+        setFaturadoPor((data as any)?.cpf_cnpj ? `${(data as any).razao_social ?? (data as any).nome} · ${(data as any).cpf_cnpj}` : null);
+      });
   }, [fid]);
 
   const [aba, setAba] = useState<Aba>(params?.aba ?? 'cadastrar');
@@ -77,6 +81,22 @@ export default function VendaForm() {
   const [data, setData] = useState(hojeBR());
   const [tipo, setTipo] = useState<string[]>([params?.contratoId ? 'cafe' : 'animais']);
   const [pessoaId, setPessoaId] = useState<string | null>(null);
+  // V159: fazenda do cliente (produtor rural) para onde vai a mercadoria, e a GTA da venda de gado
+  const [fazCliente, setFazCliente] = useState<FazendaCliente[]>([]);
+  const [fatId, setFatId] = useState<string | null>(null);
+  const [gtaNum, setGtaNum] = useState('');
+  const [gtaSerie, setGtaSerie] = useState('');
+  const [gtaUf, setGtaUf] = useState('');
+  useEffect(() => {
+    setFatId(null);
+    if (!pessoaId) return setFazCliente([]);
+    lerFazendasCliente(pessoaId)
+      .then((l) => {
+        setFazCliente(l);
+        if (l.length === 1) setFatId(l[0].id ?? null);
+      })
+      .catch(() => setFazCliente([]));
+  }, [pessoaId]);
   const [documento, setDocumento] = useState('');
   // animais
   const [numPesagem, setNumPesagem] = useState('');
@@ -377,6 +397,7 @@ export default function VendaForm() {
       if (usaBarriga && (n(barrigaValor) ?? 0) <= 0) e.barriga = 'Informe o desconto de barriga, ou marque "Sem desconto".';
       else if (formaPreco !== 'cabeca' && (n(peso) ?? 0) > 0 && calc.pesoLiquido <= 0) e.barriga = 'O desconto de barriga não pode zerar o peso.';
       if ((n(preco) ?? 0) <= 0) e.preco = 'Informe o preço.';
+      if (!gtaNum.trim()) e.gta = 'Informe o número da GTA: venda de gado não fecha sem a GTA.';
     } else if (deCafe) {
       if (!cafeMarcado.length) e.cafe = 'Marque o café que foi vendido.';
       else if (contratoAtivo && sacasCafe > faltaContrato + 0.005) e.cafe = `O contrato nº ${contratoAtivo.numero} só tem ${textoSacas(faltaContrato)} a entregar. O que passar vai em outra venda, sem contrato.`;
@@ -418,6 +439,10 @@ export default function VendaForm() {
       conta_bancaria_id: bancoId,
       forma_pagamento: pagto[0],
       observacoes: obs,
+      pessoa_faturamento_id: fatId ?? '',
+      gta_numero: deAnimais ? gtaNum.trim() : '',
+      gta_serie: deAnimais ? gtaSerie.trim() : '',
+      gta_uf: deAnimais ? gtaUf.trim() : '',
       animais: deAnimais
         ? {
             lote_origem: origem[0] === 'faixa' ? '' : lote!.id,
@@ -571,6 +596,14 @@ export default function VendaForm() {
       />
       {faturadoPor ? <Text style={{ fontSize: 13, color: '#56625A' }}>Faturamento em nome de: {faturadoPor}</Text> : null}
       <CampoPessoaBusca rotulo="Cliente *" valorId={pessoaId} aoMudar={setPessoaId} tipoNovo="cliente" erro={erros.pessoa} />
+      {fazCliente.length > 0 && (
+        <Escolha
+          rotulo="Fazenda do cliente (para onde vai)"
+          opcoes={fazCliente.map((f) => ({ valor: f.id!, rotulo: [f.nome_fazenda || 'Fazenda', f.municipio].filter(Boolean).join(' · ') }))}
+          valor={fatId ? [fatId] : []}
+          aoMudar={(v) => setFatId(v[0] ?? null)}
+        />
+      )}
       <Campo rotulo={deAnimais ? 'Nº da nota / GTA' : 'Nº da nota / documento'} value={documento} onChangeText={setDocumento} autoCapitalize="characters" />
 
       {deAnimais ? (
@@ -1039,6 +1072,24 @@ export default function VendaForm() {
       <Text style={estilos.nota}>O recebimento é confirmado em Financeiro › Contas a receber › Receber, quando o dinheiro entrar.</Text>
 
       <Campo rotulo="Observações" value={obs} onChangeText={setObs} multiline style={{ minHeight: 72, paddingTop: 12, textAlignVertical: 'top' }} />
+      {deAnimais && (
+        <>
+          {/* V159: venda de gado não fecha sem a GTA (ela vai junto para a nota fiscal) */}
+          <Secao titulo="GTA (Guia de Trânsito Animal)" />
+          <View style={estilos.linha}>
+            <View style={{ flex: 2 }}>
+              <Campo rotulo="Número da GTA *" value={gtaNum} onChangeText={(t) => setGtaNum(t.replace(/[^0-9A-Za-z-]/g, '').slice(0, 20))} autoCapitalize="characters" erro={erros.gta} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Campo rotulo="Série" value={gtaSerie} onChangeText={(t) => setGtaSerie(t.toUpperCase().slice(0, 5))} autoCapitalize="characters" />
+            </View>
+            <View style={{ width: 70 }}>
+              <Campo rotulo="UF" value={gtaUf} onChangeText={(t) => setGtaUf(t.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2))} autoCapitalize="characters" />
+            </View>
+          </View>
+          <Text style={estilos.nota}>Tire a GTA no sistema do órgão de defesa sanitária (no ES, o IDAF) e informe o número aqui. Ela vai sozinha para a nota fiscal.</Text>
+        </>
+      )}
       <Botao titulo="Gravar venda" onPress={salvar} carregando={salvando} />
     </Tela>
   );

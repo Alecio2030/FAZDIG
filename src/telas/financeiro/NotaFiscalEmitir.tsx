@@ -8,6 +8,7 @@ import Campo from '../../componentes/Campo';
 import Escolha from '../../componentes/Escolha';
 import Secao from '../../componentes/Secao';
 import { useSessao } from '../../contexto/SessaoContext';
+import { supabase } from '../../lib/supabase';
 import { CSOSN, CST_ICMS, FRETE, PAGAMENTO, chamarNfe } from '../../lib/nfe';
 import { formatarMoeda, formatarQtd, lerNumero, mascaraCep, mascaraCpfCnpj, numeroParaCampo, somenteDigitos } from '../../lib/formatos';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
@@ -72,7 +73,24 @@ export default function NotaFiscalEmitir() {
           reducao: numeroParaCampo(it.reducao_bc),
         })),
       );
-      setGta(n.gta);
+      // V159: a GTA e a fazenda do cliente vêm da venda
+      const { data: vg } = await supabase
+        .from('vendas')
+        .select('gta_numero, gta_serie, gta_uf, faturamento:pessoas_faturamento ( nome_fazenda, inscricao_sanitaria )')
+        .eq('id', params.vendaId)
+        .maybeSingle();
+      const vv = vg as any;
+      setGta(
+        n.gta
+          ? { numero: vv?.gta_numero ?? n.gta.numero ?? '', serie: vv?.gta_serie ?? n.gta.serie ?? '', uf: vv?.gta_uf ?? n.gta.uf ?? '' }
+          : vv?.gta_numero
+            ? { numero: vv.gta_numero, serie: vv.gta_serie ?? '', uf: vv.gta_uf ?? '' }
+            : null,
+      );
+      const fc = Array.isArray(vv?.faturamento) ? vv.faturamento[0] : vv?.faturamento;
+      const sanit = fc?.inscricao_sanitaria?.trim()
+        ? `Destino: ${fc.nome_fazenda?.trim() ? `${fc.nome_fazenda.trim()}, ` : ''}inscrição no órgão de defesa sanitária nº ${fc.inscricao_sanitaria.trim()}.`
+        : '';
       setFrete(n.transporte?.modalidade ?? '9');
       const tp = n.transporte?.transportadora ?? {};
       setTransp({ nome: tp.nome ?? '', doc: tp.doc ? mascaraCpfCnpj(tp.doc) : '', uf: tp.uf ?? '', placa: n.transporte?.placa ?? '', uf_placa: n.transporte?.uf_placa ?? '' });
@@ -80,7 +98,7 @@ export default function NotaFiscalEmitir() {
       setVol({ quantidade: numeroParaCampo(v.quantidade), especie: v.especie ?? '', peso_bruto: numeroParaCampo(v.peso_bruto), peso_liquido: numeroParaCampo(v.peso_liquido) });
       setIndPag(String(n.pagamento?.indicador ?? 0));
       setTPag(n.pagamento?.tipo ?? '99');
-      setInfo(n.info_complementar ?? '');
+      setInfo([n.info_complementar ?? '', sanit].filter((x) => x.trim()).join(' '));
     })();
   }, [params.vendaId, navegacao]);
 

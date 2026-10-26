@@ -380,7 +380,7 @@ export default function VendaForm() {
   }, [fid]);
 
   // ---- salvar ----
-  async function salvar() {
+  async function salvar(semGtaConfirmado?: unknown) {
     setErro(null);
     setAviso(null);
     const e: Record<string, string> = {};
@@ -407,7 +407,6 @@ export default function VendaForm() {
       if (usaBarriga && (n(barrigaValor) ?? 0) <= 0) e.barriga = 'Informe o desconto de barriga, ou marque "Sem desconto".';
       else if (formaPreco !== 'cabeca' && (n(peso) ?? 0) > 0 && calc.pesoLiquido <= 0) e.barriga = 'O desconto de barriga não pode zerar o peso.';
       if ((n(preco) ?? 0) <= 0) e.preco = 'Informe o preço.';
-      if (!gtaNum.trim()) e.gta = 'Informe o número da GTA: venda de gado não fecha sem a GTA.';
     } else if (deCafe) {
       if (!cafeMarcado.length) e.cafe = 'Marque o café que foi vendido.';
       else if (contratoAtivo && sacasCafe > faltaContrato + 0.005) e.cafe = `O contrato nº ${contratoAtivo.numero} só tem ${textoSacas(faltaContrato)} a entregar. O que passar vai em outra venda, sem contrato.`;
@@ -502,6 +501,18 @@ export default function VendaForm() {
       rateio: rateio.map((x) => ({ centro_custo_id: x.centroId, percentual: n(x.perc) })),
       parcelas: parcelas.map((x) => ({ vencimento: paraBanco(x.venc), valor: n(x.valor) })),
     };
+    // V161: a venda grava sem a GTA, mas avisa que o gado só pode ser transportado com ela (e com a NF, onde for obrigatória)
+    if (deAnimais && !gtaNum.trim() && semGtaConfirmado !== true) {
+      Alert.alert(
+        'Venda sem GTA',
+        'O gado só pode ser transportado com a GTA (e com a nota fiscal, no estado em que ela for obrigatória). Você pode gravar a venda agora e informar a GTA depois, na consulta da venda.',
+        [
+          { text: 'Voltar e informar', style: 'cancel' },
+          { text: 'Gravar sem a GTA', onPress: () => void salvar(true) },
+        ],
+      );
+      return;
+    }
     setSalvando(true);
     const { data: r, error } = contratoAtivo ? await supabase.rpc('salvar_venda_contrato', { p: { ...p, cafe_contrato_id: contratoAtivo.id } }) : await supabase.rpc('salvar_venda', { p });
     setSalvando(false);
@@ -1123,7 +1134,7 @@ export default function VendaForm() {
           <Secao titulo="GTA (Guia de Trânsito Animal)" />
           <View style={estilos.linha}>
             <View style={{ flex: 2 }}>
-              <Campo rotulo="Número da GTA *" value={gtaNum} onChangeText={(t) => setGtaNum(t.replace(/[^0-9A-Za-z-]/g, '').slice(0, 20))} autoCapitalize="characters" erro={erros.gta} />
+              <Campo rotulo="Número da GTA" value={gtaNum} onChangeText={(t) => setGtaNum(t.replace(/[^0-9A-Za-z-]/g, '').slice(0, 20))} autoCapitalize="characters" erro={erros.gta} />
             </View>
             <View style={{ flex: 1 }}>
               <Campo rotulo="Série" value={gtaSerie} onChangeText={(t) => setGtaSerie(t.toUpperCase().slice(0, 5))} autoCapitalize="characters" />
@@ -1132,7 +1143,7 @@ export default function VendaForm() {
               <Campo rotulo="UF" value={gtaUf} onChangeText={(t) => setGtaUf(t.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2))} autoCapitalize="characters" />
             </View>
           </View>
-          <Text style={estilos.nota}>Tire a GTA no sistema do órgão de defesa sanitária (no ES, o IDAF) e informe o número aqui. Ela vai sozinha para a nota fiscal.</Text>
+          <Text style={estilos.nota}>A GTA é obrigatória para transportar o gado. Tire no sistema do órgão de defesa sanitária (no ES, o IDAF) e informe o número aqui, ou depois, na consulta da venda. Ela vai sozinha para a nota fiscal.</Text>
         </>
       )}
       <Botao titulo="Gravar venda" onPress={salvar} carregando={salvando} />

@@ -7,6 +7,7 @@ import Linha from '../../componentes/Linha';
 import Lista from '../../componentes/Lista';
 import Secao from '../../componentes/Secao';
 import Botao from '../../componentes/Botao';
+import GtaVenda from '../../componentes/GtaVenda';
 import { Alert } from '../../lib/alerta';
 import { excluirComEstorno } from '../../lib/excluir';
 import { useSessao } from '../../contexto/SessaoContext';
@@ -141,6 +142,10 @@ export default function VendaDetalhe() {
       ) : null}
       <Dado rotulo="Nota Fiscal" valor={v.numero_documento ? `nº ${v.numero_documento}${v.documento_serie ? ` série ${v.documento_serie}` : ''}` : null} />
       {v.tipo === 'animais' ? <Dado rotulo="GTA" valor={v.gta_numero ? `nº ${v.gta_numero}${v.gta_serie ? ` série ${v.gta_serie}` : ''}${v.gta_uf ? `/${v.gta_uf}` : ''}` : null} /> : null}
+      {/* V161: a GTA pode ser informada depois (é obrigatória para o transporte e na NF-e do gado) */}
+      {v.tipo === 'animais' && v.fazenda_id === fazendaAtiva?.id ? (
+        <GtaVenda key={v.gta_numero ?? 'sem'} vendaId={v.id} atual={v} aoGravar={(g) => setV({ ...v, ...g })} />
+      ) : null}
 
       {v.tipo === 'animais' ? (
         <>

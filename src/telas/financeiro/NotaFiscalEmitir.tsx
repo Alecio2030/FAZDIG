@@ -115,6 +115,8 @@ export default function NotaFiscalEmitir() {
 
   async function emitir() {
     setErro(null);
+    // V161: a nota do gado leva a GTA (para o transporte as duas são obrigatórias)
+    if (gta && !gta.numero.trim()) return setErro('Informe o número da GTA: a nota do gado sai com a GTA.');
     const nota = {
       natureza: natureza.trim(),
       dest: { ...dest, doc: somenteDigitos(dest.doc), cep: somenteDigitos(dest.cep), uf: dest.uf.toUpperCase() },
@@ -141,6 +143,8 @@ export default function NotaFiscalEmitir() {
       info_complementar: info.trim(),
     };
     setEnviando(true);
+    // a GTA informada aqui fica gravada também na venda
+    if (gta?.numero.trim()) await supabase.rpc('informar_gta_venda', { p_venda: params.vendaId, p_numero: gta.numero.trim(), p_serie: gta.serie ?? '', p_uf: gta.uf ?? '' });
     const r = await chamarNfe<any>({ acao: 'emitir', venda_id: params.vendaId, nota });
     setEnviando(false);
     if ('erro' in r && r.erro) return setErro(r.erro);

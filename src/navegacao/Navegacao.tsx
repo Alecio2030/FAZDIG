@@ -103,6 +103,9 @@ import FreteForm from '../telas/frota/FreteForm';
 import RegistroLancamentos from '../telas/RegistroLancamentos';
 import CopiaSeguranca from '../telas/CopiaSeguranca';
 import NotaFiscalConfig from '../telas/NotaFiscalConfig';
+import NotaFiscalEmitir from '../telas/financeiro/NotaFiscalEmitir';
+import NotaFiscalDetalhe from '../telas/financeiro/NotaFiscalDetalhe';
+import NotasFiscais from '../telas/financeiro/NotasFiscais';
 
 const Pilha = createNativeStackNavigator<PilhaParams>();
 
@@ -327,6 +330,9 @@ export default function Navegacao() {
             <Pilha.Screen name="RegistroLancamentos" component={P(RegistroLancamentos)} options={{ title: 'Auditoria' }} />
             <Pilha.Screen name="CopiaSeguranca" component={P(CopiaSeguranca)} options={{ title: 'Cópia de segurança' }} />
             <Pilha.Screen name="NotaFiscalConfig" component={P(NotaFiscalConfig)} options={{ title: 'Nota fiscal (NF-e)' }} />
+            <Pilha.Screen name="NotaFiscalEmitir" component={P(NotaFiscalEmitir)} options={{ title: 'Emitir NF-e' }} />
+            <Pilha.Screen name="NotaFiscalDetalhe" component={P(NotaFiscalDetalhe)} options={{ title: 'Nota fiscal' }} />
+            <Pilha.Screen name="NotasFiscais" component={P(NotasFiscais)} options={{ title: 'Notas fiscais emitidas' }} />
             <Pilha.Screen name="DietaForm" component={P(DietaForm)} options={{ title: 'Dietas' }} />
             <Pilha.Screen name="DietaDetalhe" component={P(DietaDetalhe)} options={{ title: 'Dieta' }} />
             <Pilha.Screen name="AlimentoForm" component={P(AlimentoForm)} options={{ title: 'Alimentos' }} />

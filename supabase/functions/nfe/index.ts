@@ -1,12 +1,13 @@
-// V156: NF-e de produtor rural, etapa 1.
-//  - "certificado": recebe o certificado A1 (.pfx) e a senha, confere, e guarda cifrado para a fazenda.
-//  - "testar": consulta o Status do Serviço na Sefaz com o certificado da fazenda (prova que a comunicação funciona).
-// Só o Produtor e o Administrador usam. O certificado nunca volta para o app.
+// NF-e de produtor rural.
+// V156 (etapa 1): "certificado" (envia o A1 da fazenda) e "testar" (Status do Serviço na Sefaz) — Produtor/Administrador.
+// V157 (etapa 2): "previa" (dados da venda para conferir), "emitir", "consultar", "cancelar", "danfe" e "xml".
+// O certificado nunca volta para o app.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { lerCertificado } from './certificado.ts';
 import { cifrar, decifrar } from './cifra.ts';
 import { CODIGO_UF, campo, enviarSoap, urlServico } from './sefaz.ts';
+import { cancelar, consultar, danfe, emitir, previa, xmlDa, type NotaConferencia } from './emissao.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -96,6 +97,8 @@ async function testar(fazendaId: string) {
   return { ok: cStat === '107', cStat, motivo: xMotivo, ambiente };
 }
 
+type Corpo = { acao?: string; fazenda_id?: string; pfx?: string; senha?: string; venda_id?: string; nota_id?: string; nota?: NotaConferencia; justificativa?: string };
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return resposta({ erro: 'Use POST.' }, 405);
@@ -103,21 +106,57 @@ Deno.serve(async (req: Request) => {
   const autorizacao = req.headers.get('Authorization') ?? '';
   const usuario = createClient(URL_PROJETO, ANON, { global: { headers: { Authorization: autorizacao } }, auth: { persistSession: false } });
   const { data: quem } = await usuario.auth.getUser();
-  if (!quem?.user) return resposta({ erro: 'Entre no app para configurar a nota fiscal.' }, 401);
-  const { data: pode } = await usuario.rpc('nfe_pode_configurar');
-  if (pode !== true) return resposta({ erro: 'Só o Produtor ou o Administrador configuram a nota fiscal.' }, 403);
+  if (!quem?.user) return resposta({ erro: 'Entre no app para usar a nota fiscal.' }, 401);
 
-  let corpo: { acao?: string; fazenda_id?: string; pfx?: string; senha?: string };
+  let corpo: Corpo;
   try {
     corpo = await req.json();
   } catch {
     return resposta({ erro: 'Pedido inválido.' }, 400);
   }
-  if (!corpo.fazenda_id) return resposta({ erro: 'Escolha a fazenda.' }, 400);
+
+  // de qual fazenda é o pedido (pela venda ou pela nota), para conferir o acesso de quem pediu
+  async function fazendaDoPedido(): Promise<string> {
+    if (corpo.fazenda_id) return corpo.fazenda_id;
+    if (corpo.venda_id) {
+      const { data } = await admin.from('vendas').select('fazenda_id').eq('id', corpo.venda_id).maybeSingle();
+      if (data?.fazenda_id) return data.fazenda_id;
+      throw new Error('Venda não encontrada.');
+    }
+    if (corpo.nota_id) {
+      const { data } = await admin.from('nfe_notas').select('fazenda_id').eq('id', corpo.nota_id).maybeSingle();
+      if (data?.fazenda_id) return data.fazenda_id;
+      throw new Error('Nota não encontrada.');
+    }
+    throw new Error('Escolha a fazenda.');
+  }
+  const chefe = async () => (await usuario.rpc('nfe_pode_configurar')).data === true;
 
   try {
-    if (corpo.acao === 'certificado') return resposta(await enviarCertificado(corpo.fazenda_id, corpo.pfx ?? '', corpo.senha ?? '', quem.user.id));
-    if (corpo.acao === 'testar') return resposta(await testar(corpo.fazenda_id));
+    const fid = await fazendaDoPedido();
+    const acao = corpo.acao ?? '';
+    if (acao === 'certificado' || acao === 'testar') {
+      if (!(await chefe())) return resposta({ erro: 'Só o Produtor ou o Administrador configuram a nota fiscal.' }, 403);
+      if (acao === 'certificado') return resposta(await enviarCertificado(fid, corpo.pfx ?? '', corpo.senha ?? '', quem.user.id));
+      return resposta(await testar(fid));
+    }
+    // emitir, consultar, DANFE e XML: quem tem acesso à fazenda
+    const { data: temAcesso } = await usuario.rpc('acesso_fazenda', { fid });
+    if (temAcesso !== true) return resposta({ erro: 'Sem acesso a esta fazenda.' }, 403);
+    if (acao === 'previa') return resposta(await previa(admin, corpo.venda_id!));
+    if (acao === 'emitir') {
+      if (!corpo.venda_id || !corpo.nota) return resposta({ erro: 'Pedido incompleto.' }, 400);
+      return resposta(await emitir(admin, corpo.venda_id, corpo.nota, quem.user.id));
+    }
+    if (acao === 'consultar') return resposta(await consultar(admin, corpo.nota_id!));
+    if (acao === 'danfe') return resposta(await danfe(admin, corpo.nota_id!));
+    if (acao === 'xml') return resposta(await xmlDa(admin, corpo.nota_id!));
+    if (acao === 'cancelar') {
+      // cancelar: o Produtor, o Administrador ou quem tem acesso completo à fazenda
+      const { data: completo } = await usuario.rpc('acesso_completo', { fid });
+      if (!(await chefe()) && completo !== true) return resposta({ erro: 'Só o Produtor, o Administrador ou quem tem acesso completo cancela a nota.' }, 403);
+      return resposta(await cancelar(admin, corpo.nota_id!, corpo.justificativa ?? ''));
+    }
     return resposta({ erro: 'Ação desconhecida.' }, 400);
   } catch (e) {
     return resposta({ erro: String((e as Error)?.message ?? e) }, 422);

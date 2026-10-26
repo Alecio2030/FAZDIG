@@ -9,6 +9,7 @@ import Campo from '../componentes/Campo';
 import CampoSenha from '../componentes/CampoSenha';
 import Escolha from '../componentes/Escolha';
 import Secao from '../componentes/Secao';
+import RegrasFiscais from '../componentes/RegrasFiscais';
 import { useSessao } from '../contexto/SessaoContext';
 import { consulta, supabase, traduzirErro } from '../lib/supabase';
 import { eDono } from '../lib/acessos';
@@ -308,9 +309,16 @@ export default function NotaFiscalConfig() {
           ) : null}
           <Botao titulo="Testar comunicação com a Sefaz" tipo="secundario" onPress={testar} carregando={testando} desabilitado={!temCert} />
 
+          <Secao titulo="Tributação padrão (todas as fazendas)" />
+          <RegrasFiscais simples={crt === '1'} />
+
+          <Secao titulo="Notas emitidas" />
+          <Botao titulo="Buscar notas emitidas" tipo="secundario" onPress={() => navegacao.push('NotasFiscais')} />
+
           <View style={estilos.ajuda}>
-            <Text style={estilos.ajudaTitulo}>O que vem a seguir</Text>
-            <Text style={estilos.nota}>• Esta é a etapa 1: deixar cada fazenda pronta para emitir. A emissão das notas (venda de café e de gado, remessas, retornos, transferências e devoluções), o DANFE, o cancelamento e a carta de correção chegam nas próximas versões.</Text>
+            <Text style={estilos.ajudaTitulo}>Como emitir</Text>
+            <Text style={estilos.nota}>• A nota sai da venda: lance a venda em Mais › Vendas, abra-a na consulta e toque em “Emitir NF-e”. O sistema traz o comprador, os produtos e a tributação; confira, complete (GTA, transporte) e envie.</Text>
+            <Text style={estilos.nota}>• Remessa e retorno de armazém, transferência entre fazendas, devolução, carta de correção e inutilização de números chegam na próxima etapa.</Text>
             <Text style={estilos.nota}>• O certificado A1 vale 1 ano. O sistema avisa quando faltar 30 dias para vencer.</Text>
             <Text style={estilos.nota}>• A fazenda precisa estar credenciada como emissora de NF-e na Sefaz-ES. Se o teste der erro de credenciamento, procure a Agência da Receita Estadual ou a contabilidade.</Text>
           </View>

@@ -57,7 +57,7 @@ export function lerCertificado(pfx: Uint8Array, senha: string): Certificado {
   const chave = chaves.find((b) => b.key)?.key as forge.pki.rsa.PrivateKey | undefined;
   if (!chave) throw new Error('O arquivo não tem a chave privada. Exporte o certificado A1 com a chave privada (arquivo .pfx).');
 
-  const certs = (p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] ?? []).map((b) => b.cert).filter(Boolean) as forge.pki.Certificate[];
+  const certs = (p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] ?? []).map((b: { cert?: forge.pki.Certificate }) => b.cert).filter(Boolean) as forge.pki.Certificate[];
   // o certificado do titular é o que tem a mesma chave pública da chave privada
   const titularCert = certs.find((c) => {
     const pub = c.publicKey as forge.pki.rsa.PublicKey;

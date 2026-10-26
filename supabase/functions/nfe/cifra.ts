@@ -28,7 +28,7 @@ const deB64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 export async function cifrar(dados: Uint8Array): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await chave(), dados));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await chave(), dados as BufferSource));
   return `v1.${paraB64(iv)}.${paraB64(ct)}`;
 }
 
@@ -36,7 +36,7 @@ export async function decifrar(texto: string): Promise<Uint8Array> {
   const [versao, iv, ct] = texto.split('.');
   if (versao !== 'v1' || !iv || !ct) throw new Error('Certificado guardado em formato desconhecido. Envie o certificado de novo.');
   try {
-    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: deB64(iv) }, await chave(), deB64(ct)));
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: deB64(iv) as BufferSource }, await chave(), deB64(ct) as BufferSource));
   } catch {
     throw new Error('Não foi possível abrir o certificado guardado (a chave do servidor mudou). Envie o certificado de novo.');
   }

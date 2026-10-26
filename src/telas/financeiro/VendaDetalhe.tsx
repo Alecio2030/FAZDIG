@@ -20,6 +20,7 @@ import { custoPorSacaLotes } from '../../lib/custosCafe';
 import { textoSacas } from '../../lib/posColheita';
 import { rotuloTipo } from '../../lib/armazem';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
+import { TEXTO_SITUACAO, type SituacaoNota } from '../../lib/nfe';
 import { cores, tam } from '../../tema';
 
 const um = (v: any) => (Array.isArray(v) ? v[0] ?? null : v ?? null);
@@ -37,6 +38,7 @@ export default function VendaDetalhe() {
   const [erro, setErro] = useState<string | null>(null);
   const [falha, setFalha] = useState<string | null>(null);
   const [excluindo, setExcluindo] = useState(false);
+  const [notas, setNotas] = useState<any[]>([]);
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: v ? `Venda nº ${v.numero}` : 'Venda' });
@@ -59,6 +61,8 @@ export default function VendaDetalhe() {
               .single(),
           );
           setV(venda);
+          // V157: notas fiscais desta venda (se o banco ainda não tem a tabela, a ficha segue sem elas)
+          supabase.from('nfe_notas').select('id, numero, serie, ambiente, situacao, created_at').eq('venda_id', params.id).order('created_at', { ascending: false }).then(({ data }) => setNotas(data ?? []));
           if (venda.tipo === 'cafe') {
             // custo por saca de cada lote vendido (pela origem: talhão e safra); se não der para calcular, a ficha mostra só a venda
             custoPorSacaLotes(venda.fazenda_id, ((venda.itens as any[]) ?? []).map((i) => i.cafe_lote_id).filter(Boolean)).then(setCustos).catch(() => setCustos({}));
@@ -244,6 +248,24 @@ export default function VendaDetalhe() {
             {animais.length > 300 ? ' …' : ''}
           </Text>
         </>
+      )}
+
+      {/* V157: nota fiscal eletrônica da venda */}
+      <Secao titulo="Nota fiscal (NF-e)" />
+      {notas.length ? (
+        <Lista>
+          {notas.map((n) => (
+            <Linha
+              key={n.id}
+              titulo={`NF-e nº ${n.numero} / ${n.serie}${n.ambiente === 2 ? ' (teste)' : ''}`}
+              linhas={[TEXTO_SITUACAO[n.situacao as SituacaoNota] ?? n.situacao]}
+              onPress={() => navegacao.push('NotaFiscalDetalhe', { id: n.id })}
+            />
+          ))}
+        </Lista>
+      ) : null}
+      {!notas.some((n) => n.situacao === 'autorizada') && (
+        <Botao titulo={notas.length ? 'Emitir a NF-e desta venda' : 'Emitir NF-e'} onPress={() => navegacao.push('NotaFiscalEmitir', { vendaId: v.id })} />
       )}
 
       <Secao titulo="Outros" />

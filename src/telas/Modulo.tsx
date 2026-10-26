@@ -34,8 +34,8 @@ export default function Modulo({ chave }: { chave: ChaveModulo }) {
   );
 }
 
-export const FORA_ADM = ['vendas'];
-export const FORA_PARTICULAR = ['vendas', 'imobilizado', 'plano', 'tipos', 'transferencias'];
+export const FORA_ADM = ['vendas', 'notas'];
+export const FORA_PARTICULAR = ['vendas', 'notas', 'imobilizado', 'plano', 'tipos', 'transferencias'];
 
 export const estilos = StyleSheet.create({
   lista: { borderRadius: tam.raio, overflow: 'hidden', borderWidth: 1, borderColor: cores.borda },

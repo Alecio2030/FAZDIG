@@ -92,6 +92,12 @@ export type PilhaParams = {
   CopiaSeguranca: undefined;
   /** V156: NF-e por fazenda — dados fiscais, certificado A1, numeração, ambiente e teste com a Sefaz */
   NotaFiscalConfig: undefined;
+  /** V157: conferência e emissão da NF-e de uma venda */
+  NotaFiscalEmitir: { vendaId: string };
+  /** V157: uma NF-e (DANFE, XML, consulta e cancelamento) */
+  NotaFiscalDetalhe: { id: string; aviso?: string };
+  /** V157: busca das NF-e emitidas */
+  NotasFiscais: undefined;
   SafraDetalhe: { id: string };
   /** Colheitas: abas Lançar | Pagamento (vales e fechamento dos colhedores) | Consultar */
   ColheitaForm: { areaId?: string; aba?: 'lancar' | 'pagamento' | 'consultar'; aviso?: string; abrirId?: string } | undefined;

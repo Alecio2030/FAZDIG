@@ -156,6 +156,9 @@ export type PilhaParams = {
   AnimalForm: { id?: string; loteId?: string; aba?: 'cadastrar' | 'consultar' };
   LoteForm: { id?: string } & Abertura;
   LoteDetalhe: { id: string };
+  /** V208: Pecuário › Parcerias */
+  Parcerias: undefined;
+  ParceriaDetalhe: { id: string };
   /** V205: parceriaVenda = abre a Entrada por parceria preenchida com o gado da venda que ficou na fazenda */
   MovimentacaoForm: (Abertura & { parceriaVenda?: ParceriaDaVenda }) | undefined;
   MovimentacaoDetalhe: { id: string };

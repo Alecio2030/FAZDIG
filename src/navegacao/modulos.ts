@@ -24,6 +24,7 @@ export const MODULOS: Record<ChaveModulo, { titulo: string; funcoes: Funcao[] }>
     funcoes: [
       { chave: 'animais', titulo: 'Animais', descricao: 'Com ou sem controle genealógico', icone: 'paw-outline', tela: { rota: 'AnimalForm', params: {} } },
       { chave: 'lotes', titulo: 'Lotes', descricao: 'Lotes próprios e de parceria', icone: 'albums-outline', tela: { rota: 'LoteForm', params: {} } },
+      { chave: 'parcerias', titulo: 'Parcerias', descricao: 'Registros das parcerias: parceiro, quantidade, sexo, data, peso e idade de entrada, raça, ferro e condições; lote dos animais que entraram sem lote', icone: 'people-outline', tela: { rota: 'Parcerias' } },
       { chave: 'movimentacoes', titulo: 'Movimentações', descricao: 'Nascimento, compra, morte, parceria e transferências (a venda é em Mais › Vendas)', icone: 'swap-horizontal-outline', tela: { rota: 'MovimentacaoForm', params: {} } },
       { chave: 'conferir_campo', titulo: 'Conferir o campo', descricao: 'O que o vaqueiro lançou no Modo Vaqueiro (contagem, vistoria das mangas, tarefas): confirmar ou rejeitar', icone: 'phone-portrait-outline', tela: { rota: 'CampoConferir' } },
       { chave: 'estoque_fiscal', titulo: 'Estoque de gado', descricao: 'Por sexo e faixa de idade: Total, Com GTA e a Diferença; saldo inicial, GTAs (entram sozinhas), nascimentos, mortes e mudança de faixa', icone: 'clipboard-outline', tela: { rota: 'EstoqueFiscal', params: {} } },

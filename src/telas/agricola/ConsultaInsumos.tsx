@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from 'react';
+import { StyleSheet, Text } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Busca from '../../componentes/Busca';
 import Escolha from '../../componentes/Escolha';
@@ -14,6 +15,7 @@ import { CATEGORIAS_INSUMO, CATEGORIAS_VETERINARIAS, GRUPO_CATEGORIA, ROTULO_CAT
 import { linhaCompraDoProduto, ultimasComprasDosProdutos } from '../../lib/ultimasCompras';
 import { nomeUnidade as nomeDaUnidade } from '../../lib/unidades';
 import type { NavPilha } from '../../navegacao/rotas';
+import { cores, tam } from '../../tema';
 
 const MAXIMO = 20;
 
@@ -101,6 +103,39 @@ export default function ConsultaInsumos({ grupo, estoque }: { grupo?: 'veterinar
         dica={estoque ? `Aparecem só os produtos com movimento em ${estoque.nome}. Digite o nome ou o código; os botões acima filtram pela categoria.` : 'Digite o nome ou o código do insumo. Os botões acima filtram pela categoria. O saldo fica em Mais › Estoque.'}
         refinar="do nome"
         item={(i: any) => {
+          // V208: no estoque, só o essencial (saldo em negrito, mínimo, último custo e custo médio); tocando, abre o resto
+          if (estoque) {
+            const repor = i.estoque_minimo != null && i.saldo <= Number(i.estoque_minimo);
+            return (
+              <Linha
+                key={i.id}
+                titulo={i.codigo != null ? `${i.codigo} · ${i.nome}` : i.nome}
+                inativo={!i.ativo}
+                onPress={() => navegacao.navigate('EstoqueDetalhe', { insumoId: i.id, fazendaId: estoque.id })}
+                extra={
+                  <>
+                    <Text style={estilos.saldo}>
+                      {todas ? 'Estoque atual (total): ' : 'Estoque atual: '}
+                      {textoSaldo(i.saldo, i)}
+                    </Text>
+                    {((i.porFazenda ?? []) as any[]).map((x) => (
+                      <Text key={x.f} style={estilos.detalhe}>
+                        {'   '}
+                        {nomeDaUnidade(x.f, fazendas)}: <Text style={{ fontWeight: '700' }}>{textoSaldo(x.s, i)}</Text>
+                      </Text>
+                    ))}
+                    <Text style={[estilos.detalhe, repor && { color: cores.erro, fontWeight: '700' }]}>
+                      Estoque mínimo: {i.estoque_minimo != null ? `${formatarQtd(i.estoque_minimo)} ${i.unidade ?? ''}${repor ? ' · REPOR' : ''}` : 'não informado'}
+                    </Text>
+                    <Text style={estilos.detalhe}>
+                      Custo unitário da última compra: {i.custos?.ultimo != null ? `${formatarMoeda(i.custos.ultimo)} por ${i.unidade}` : '—'}
+                    </Text>
+                    <Text style={estilos.detalhe}>Custo médio atual: {i.custos?.medio != null ? `${formatarMoeda(i.custos.medio)} por ${i.unidade}` : '—'}</Text>
+                  </>
+                }
+              />
+            );
+          }
           const vet = CATEGORIAS_VETERINARIAS.includes(i.categoria);
           const dose = vet ? textoDose(i, i.unidade) : null;
           const compras: any[] = i.compras ?? [];
@@ -131,3 +166,8 @@ export default function ConsultaInsumos({ grupo, estoque }: { grupo?: 'veterinar
     </>
   );
 }
+
+const estilos = StyleSheet.create({
+  saldo: { fontSize: tam.texto, fontWeight: '800', color: cores.texto },
+  detalhe: { fontSize: tam.pequeno, color: cores.textoSuave },
+});

@@ -4159,3 +4159,36 @@ Banco: já atualizado direto no Supabase (nada a rodar). O arquivo banco\V207_ba
   de entrada de cada animal, em qualquer item.
 - Excluir um item da entrada (Movimentações › Consultar): a parceria continua com os outros itens
   (cabeças, peso e apascentamento recalculados). Com saída lançada, exclua primeiro a saída.
+
+---
+
+# Fazenda Digital V208 (instale por cima da V207)
+
+Banco: já atualizado direto no Supabase (nada a rodar). O arquivo banco\V208_banco.sql vai só para guardar.
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V208.
+
+## V208
+### Entrada por parceria sem lote
+- O lote de cada item é opcional. Sem lote, os animais entram sem lote.
+- O lote é informado depois em Pecuário › Parcerias (ficha da parceria › "Pôr no lote").
+  Lote que não existe é cadastrado na hora, com o sexo, a raça, o ferro e a idade dos animais.
+- Para a saída da parceria, os animais precisam estar num lote.
+
+### Pecuário › Parcerias (novo)
+- Registros das parcerias: Abertas, Encerradas ou Todas; busca pelo parceiro ou pelo nº.
+- Cada parceria mostra: parceiro, quantidade, sexo, data e peso de entrada (e a média), idade na entrada,
+  raça, ferro e condições (apascentamento ou rendimento); avisa quando há animais sem lote.
+- Tocando, abre a ficha: os mesmos dados, as cabeças em aberto, a venda de origem (se veio da venda)
+  e os itens da entrada, cada um com o seu lote.
+
+### Mais › Estoque (por fazenda)
+- A lista mostra só: Estoque atual (quantidade e unidade, em negrito), estoque mínimo (em vermelho, REPOR),
+  custo unitário da última compra e custo médio atual.
+- Tocando no produto abre o resto: fornecedores, últimas compras, prazos, entradas e saídas.

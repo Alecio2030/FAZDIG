@@ -94,6 +94,8 @@ import Animais from '../telas/rebanho/Animais';
 import AnimalForm from '../telas/rebanho/AnimalForm';
 import ConsultaAnimal from '../telas/rebanho/ConsultaAnimal';
 import LoteForm from '../telas/rebanho/LoteForm';
+import Parcerias from '../telas/rebanho/Parcerias';
+import ParceriaDetalhe from '../telas/rebanho/ParceriaDetalhe';
 import MovimentacaoForm from '../telas/rebanho/MovimentacaoForm';
 import MovimentacaoDetalhe from '../telas/rebanho/MovimentacaoDetalhe';
 import GtaForm from '../telas/rebanho/GtaForm';
@@ -345,6 +347,8 @@ export default function Navegacao() {
             <Pilha.Screen name="ConsultaAnimal" component={P(ConsultaAnimal)} options={{ title: 'Consultar animal' }} />
             <Pilha.Screen name="LoteForm" component={P(LoteForm)} options={{ title: 'Lote' }} />
             <Pilha.Screen name="LoteDetalhe" component={P(LoteDetalhe)} options={{ title: 'Lote' }} />
+            <Pilha.Screen name="Parcerias" component={P(Parcerias)} options={{ title: 'Parcerias' }} />
+            <Pilha.Screen name="ParceriaDetalhe" component={P(ParceriaDetalhe)} options={{ title: 'Parceria' }} />
             <Pilha.Screen name="MovimentacaoForm" component={P(MovimentacaoForm)} options={{ title: 'Movimentações' }} />
             <Pilha.Screen name="MovimentacaoDetalhe" component={P(MovimentacaoDetalhe)} options={{ title: 'Movimentação' }} />
             <Pilha.Screen name="GtaForm" component={P(GtaForm)} options={{ title: 'GTA' }} />

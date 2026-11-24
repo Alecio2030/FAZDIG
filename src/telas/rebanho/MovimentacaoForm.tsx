@@ -603,7 +603,7 @@ export default function MovimentacaoForm() {
     });
     setSalvando(false);
     if (error) return setErro(traduzirErro(error));
-    const res = r as { ids: string[]; cabecas: number; parceria: number; titulos?: number; total?: number; itens: { cabecas: number; lote: number; lote_novo: boolean; de: number; ate: number }[] };
+    const res = r as { ids: string[]; cabecas: number; parceria: number; titulos?: number; total?: number; itens: { cabecas: number; lote: number | null; lote_novo: boolean | null; de: number; ate: number }[] };
 
     // documentos e fotos: em cada item (com NF ou GTA, o estoque de gado conta os animais de cada um)
     let avisoDoc = '';
@@ -617,9 +617,11 @@ export default function MovimentacaoForm() {
       }
     }
     const its = res.itens ?? [];
-    const novos = its.filter((x) => x.lote_novo).map((x) => x.lote);
+    const novos = its.filter((x) => x.lote_novo && x.lote).map((x) => x.lote);
+    const ondeLote = (x: { lote: number | null }) => (x.lote ? `no lote ${codigoLote(x.lote, sigla)}` : 'sem lote');
     let aviso = `Lançado: entrada por parceria de ${formatarNumero(res.cabecas)} ${res.cabecas === 1 ? 'cabeça' : 'cabeças'}`;
-    aviso += its.length > 1 ? ` em ${its.length} itens (${its.map((x) => `${formatarNumero(x.cabecas)} no lote ${codigoLote(x.lote, sigla)}`).join('; ')}).` : its[0] ? ` no lote ${codigoLote(its[0].lote, sigla)}.` : '.';
+    aviso += its.length > 1 ? ` em ${its.length} itens (${its.map((x) => `${formatarNumero(x.cabecas)} ${ondeLote(x)}`).join('; ')}).` : its[0] ? ` ${ondeLote(its[0])}.` : '.';
+    if (its.some((x) => !x.lote)) aviso += ' O lote dos que ficaram sem lote é informado em Pecuário › Parcerias.';
     aviso += ` Parceria nº ${res.parceria} gravada.`;
     if (res.titulos) aviso += ` ${res.titulos} ${res.titulos === 1 ? 'título lançado' : 'títulos mensais lançados'} no contas a receber (${formatarMoeda(Number(res.total))}).`;
     if (novos.length) aviso += ` ${novos.length === 1 ? `Lote nº ${novos[0]} cadastrado` : `Lotes nº ${novos.join(', ')} cadastrados`} (manga e outros dados completam-se em Pecuário › Lotes).`;
@@ -667,7 +669,7 @@ export default function MovimentacaoForm() {
       {pv && grupoPv && tipo === 'entrada_parceria' && (
         <Aviso
           tipo="info"
-          texto={`Venda nº ${pv.venda}: o gado ficou na fazenda. Registre a parceria: os itens vieram da venda; confira, informe o nº do lote de cada item e as condições (apascentamento ou rendimento). A NF e a GTA ficam na venda, e o estoque de terceiros do comprador já foi lançado por ela.`}
+          texto={`Venda nº ${pv.venda}: o gado ficou na fazenda. Registre a parceria: os itens vieram da venda; confira, informe o lote de cada item (opcional: pode ser depois, em Pecuário › Parcerias) e as condições (apascentamento ou rendimento). A NF e a GTA ficam na venda, e o estoque de terceiros do comprador já foi lançado por ela.`}
         />
       )}
       {erro && <Aviso tipo="erro" texto={erro} />}

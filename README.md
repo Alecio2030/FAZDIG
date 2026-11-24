@@ -2,7 +2,7 @@
 
 Sistema gerencial agropecuário: pecuária, agricultura (com o ciclo completo do café), frota e financeiro, para produtores com várias fazendas. Roda no celular (iPhone e Android) e no computador, pelo navegador.
 
-Versão atual: **V207** (24/11/2026).
+Versão atual: **V208** (24/11/2026).
 
 ## Linguagem e tecnologia
 

@@ -15,7 +15,7 @@ import { cores, tam } from '../tema';
 /**
  * V207: itens da Entrada por parceria (como os da venda de gado, sem preço).
  * Cada item: pesagem (opcional, só puxa os dados), quantidade, sexo, idade (faixa), raça, lote, ferro e peso.
- * O lote digitado que não existe é cadastrado ao lançar, com os dados do item.
+ * O lote digitado que não existe é cadastrado ao lançar, com os dados do item. V208: o lote é opcional.
  */
 export type ItemParceria = {
   chave: string;
@@ -52,7 +52,6 @@ export function validarItensParceria(itens: ItemParceria[], exigePeso: boolean):
     if (!Number.isInteger(q) || q < 1 || q > 5000) msg = 'informe a quantidade (de 1 a 5.000 cabeças).';
     else if (!it.sexo) msg = 'escolha o sexo.';
     else if (!it.faixa) msg = 'escolha a idade (animal não entra sem idade).';
-    else if (!(Number(it.lote) > 0)) msg = 'informe o nº do lote (se não existir, é cadastrado ao lançar).';
     else if (it.peso.trim() && n(it.peso) <= 0) msg = 'peso inválido. Ex.: 1.250,5';
     else if (exigePeso && n(it.peso) <= 0) msg = 'na parceria por rendimento, informe o peso (kg).';
     if (msg) e[`i${i + 1}`] = `Item ${i + 1}: ${msg}`;
@@ -69,7 +68,7 @@ export function itensParceriaParaBanco(itens: ItemParceria[], baseIso: string) {
       sexo: it.sexo,
       raca: it.racaId ?? '',
       ferro: it.ferroId ?? '',
-      lote: Number(it.lote),
+      lote: Number(it.lote) > 0 ? Number(it.lote) : '', // V208: opcional (informa-se depois em Pecuário › Parcerias)
       nascimento: nasc.iso ?? '',
       nasc_aprox: true,
       peso_total: n(it.peso) > 0 ? n(it.peso) : '',
@@ -186,7 +185,7 @@ export default function ItensParceria({ itens, setItens, fid, dataIso, erros, ao
                 <CampoRaca valorId={it.racaId} aoMudar={(v) => mudar(it.chave, { racaId: v })} />
               </View>
               <View style={{ width: 90 }}>
-                <Campo rotulo="Lote nº" value={it.lote} onChangeText={(t) => mudar(it.chave, { lote: t.replace(/\D/g, '').slice(0, 6) })} keyboardType="number-pad" />
+                <Campo rotulo="Lote nº" value={it.lote} onChangeText={(t) => mudar(it.chave, { lote: t.replace(/\D/g, '').slice(0, 6) })} keyboardType="number-pad" placeholder="Opcional" />
               </View>
               <View style={{ width: 210 }}>
                 <CampoFerro valorId={it.ferroId} aoMudar={(v) => mudar(it.chave, { ferroId: v })} />
@@ -224,7 +223,7 @@ export default function ItensParceria({ itens, setItens, fid, dataIso, erros, ao
           </Text>
         </View>
       ) : null}
-      <Text style={estilos.nota}>Os animais entram sem brinco; a identificação é feita depois, no cadastro de cada animal. Lote que não existe é cadastrado ao lançar, com o sexo, a raça, o ferro e a idade do item.</Text>
+      <Text style={estilos.nota}>Os animais entram sem brinco; a identificação é feita depois, no cadastro de cada animal. Lote é opcional: sem ele, os animais ficam sem lote e o lote é informado depois em Pecuário › Parcerias (para a saída, os animais precisam estar num lote). Lote que não existe é cadastrado ao lançar, com o sexo, a raça, o ferro e a idade do item.</Text>
     </View>
   );
 }

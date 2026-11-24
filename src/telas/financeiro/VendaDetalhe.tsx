@@ -13,6 +13,7 @@ import { excluirComEstorno } from '../../lib/excluir';
 import { useSessao } from '../../contexto/SessaoContext';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
 import { doBanco } from '../../lib/datas';
+import type { GrupoParceriaVenda } from '../../lib/movimentacoes';
 import { formatarMoeda, formatarNumero, formatarQtd } from '../../lib/formatos';
 import { codigoLote, identAnimal } from '../../lib/rebanho';
 import { useSigla } from '../../lib/useSigla';
@@ -40,6 +41,9 @@ export default function VendaDetalhe() {
   const [falha, setFalha] = useState<string | null>(null);
   const [excluindo, setExcluindo] = useState(false);
   const [notas, setNotas] = useState<any[]>([]);
+  // V206: gado vendido que ficou na fazenda: parcerias já registradas para esta venda
+  const [parcerias, setParcerias] = useState<{ numero: number; cabecas_entrada: number }[] | null>(null);
+  const [abrindoParceria, setAbrindoParceria] = useState(false);
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: v ? `Venda nº ${v.numero}` : 'Venda' });
@@ -55,7 +59,7 @@ export default function VendaDetalhe() {
               .select(
                 '*, fazenda:fazendas ( nome, razao_social, cpf_cnpj ), pessoa:pessoas ( nome ), conta:plano_contas ( nome ), banco:contas_bancarias ( nome ), lote:lotes ( numero, descricao ), pesagem:pesagens ( numero ), contrato:cafe_contratos ( id, numero, tipo ),' +
                   ' itens:venda_itens ( id, tipo_item, descricao, quantidade, unidade, valor_unitario, valor_total, custo_unitario, custo_total, cafe_lote_id, insumo:insumos ( nome ), cafe:cafe_lotes ( numero, especie, tipo, peneira ), armazem:pc_locais ( nome ),' +
-                  '   ordem, cabecas, sexo, idade_de, idade_ate, peso_kg, peso_liquido_kg, barriga_tipo, barriga_valor, kg_arroba, arrobas, forma_preco, lote_item:lotes ( numero ), raca:racas ( nome ), pesagem_item:pesagens ( numero ) ),' +
+                  '   ordem, cabecas, sexo, idade_de, idade_ate, raca_id, ferro_id, movimentacao_id, peso_kg, peso_liquido_kg, barriga_tipo, barriga_valor, kg_arroba, arrobas, forma_preco, lote_item:lotes ( numero ), raca:racas ( nome ), pesagem_item:pesagens ( numero ) ),' +
                   ' rateio:venda_rateios ( percentual, centro:centros_custo ( codigo, nome ) ),' +
                   ' parcelas:lancamentos ( id, numero, parcela, intermediaria, total_parcelas, valor, valor_pago, data_vencimento, situacao, data_pagamento )',
               )
@@ -79,6 +83,14 @@ export default function VendaDetalhe() {
             // custo por saca de cada lote vendido (pela origem: talhão e safra); se não der para calcular, a ficha mostra só a venda
             custoPorSacaLotes(venda.fazenda_id, ((venda.itens as any[]) ?? []).map((i) => i.cafe_lote_id).filter(Boolean)).then(setCustos).catch(() => setCustos({}));
           }
+          if (venda.tipo === 'animais' && venda.gado_fica) {
+            supabase
+              .from('parcerias')
+              .select('numero, cabecas_entrada')
+              .eq('venda_id', params.id)
+              .order('numero')
+              .then(({ data: ps, error: ep }) => setParcerias(ep ? [] : ((ps ?? []) as any[])));
+          }
           if (venda.tipo === 'animais') {
             const movs = await consulta<any[]>(supabase.from('movimentacoes').select('id').eq('venda_id', params.id));
             const its = movs.length ? await consulta<any[]>(supabase.from('movimentacao_itens').select('peso_kg, animal:animais ( numero_interno, brinco, nome, categoria )').in('movimentacao_id', movs.map((m) => m.id))) : [];
@@ -90,6 +102,49 @@ export default function VendaDetalhe() {
       })();
     }, [params.id]),
   );
+
+  /** V206: monta os grupos (sexo, faixa, raça, ferro) dos itens da venda e abre a Entrada por parceria preenchida. */
+  async function abrirParceria() {
+    setAbrindoParceria(true);
+    try {
+      const mapa = new Map<string, GrupoParceriaVenda>();
+      const somar = (g: Omit<GrupoParceriaVenda, 'cab' | 'peso'>, cab: number, peso: number) => {
+        const k = `${g.sexo}|${g.faixa}|${g.racaId ?? ''}|${g.ferroId ?? ''}`;
+        const x = mapa.get(k) ?? { ...g, cab: 0, peso: 0 };
+        x.cab += cab;
+        x.peso += peso;
+        mapa.set(k, x);
+      };
+      for (const i of ((v.itens as any[]) ?? []).filter((x) => x.tipo_item === 'animal')) {
+        const cab = Number(i.cabecas ?? 0);
+        const peso = Number(i.peso_kg ?? 0);
+        const base = { racaId: i.raca_id ?? null, ferroId: i.ferro_id ?? null };
+        const sx = String(i.sexo ?? '').trim() as 'M' | 'F' | '';
+        if (sx && i.idade_de != null) {
+          somar({ ...base, sexo: sx, faixa: `${sx}${i.idade_de}` }, cab, peso);
+          continue;
+        }
+        // item tirado de lote ou por brinco: a faixa vem dos próprios animais que saíram
+        const ch = i.movimentacao_id ? ((await supabase.rpc('mov_chaves_faixa', { p_mov: i.movimentacao_id })).data as Record<string, number> | null) : null;
+        const partes = Object.entries(ch ?? {}).filter(([, q]) => Number(q) > 0);
+        const total = partes.reduce((t, [, q]) => t + Number(q), 0);
+        if (!partes.length || total !== cab) {
+          somar({ ...base, sexo: sx, faixa: '' }, cab, peso);
+          continue;
+        }
+        for (const [k, q] of partes) somar({ ...base, sexo: k[0] as 'M' | 'F', faixa: k }, Number(q), cab ? (peso * Number(q)) / cab : 0);
+      }
+      const grupos = [...mapa.values()].filter((g) => g.cab > 0).map((g) => ({ ...g, peso: Math.round(g.peso * 100) / 100 }));
+      if (!grupos.length) return setFalha('Esta venda não tem itens de gado para a parceria.');
+      navegacao.push('MovimentacaoForm', {
+        parceriaVenda: { venda: v.numero, vendaId: v.id, pessoaId: v.pessoa_id, data: doBanco(v.data), grupos, parte: 1, partes: grupos.length },
+      });
+    } catch (e) {
+      setFalha(traduzirErro(e));
+    } finally {
+      setAbrindoParceria(false);
+    }
+  }
 
   function excluir() {
     Alert.alert(
@@ -181,6 +236,16 @@ export default function VendaDetalhe() {
           <Dado rotulo="Valor da venda" valor={`${formatarMoeda(Number(v.valor_bruto))}${cab ? ` · ${formatarMoeda(Number(v.valor_bruto) / cab)} por cabeça` : ''}`} />
           {v.forma_preco !== 'arroba' && Number(v.arrobas) > 0 ? <Dado rotulo="Equivale a" valor={`${formatarMoeda(Number(v.valor_bruto) / Number(v.arrobas))} por @`} /> : null}
           {v.gado_fica ? <Dado rotulo="O gado ficou na fazenda" valor="no estoque de terceiros do comprador" /> : null}
+          {/* V206: da venda vai direto ao cadastro da parceria (Entrada por parceria já preenchida) */}
+          {v.gado_fica && parcerias !== null ? (
+            parcerias.length ? (
+              <Dado rotulo="Parceria" valor={parcerias.map((p) => `nº ${p.numero} (${formatarNumero(p.cabecas_entrada)} cab.)`).join(', ')} />
+            ) : v.fazenda_id === fazendaAtiva?.id ? (
+              <Botao titulo="Registrar a parceria deste gado" onPress={abrirParceria} carregando={abrindoParceria} />
+            ) : (
+              <Aviso tipo="info" texto="A parceria deste gado ainda não foi registrada. Troque para a fazenda da venda na capa para registrar." />
+            )
+          ) : null}
           {/* V203: venda com vários itens */}
           {itens.filter((i) => i.tipo_item === 'animal').length > 1 && (
             <>

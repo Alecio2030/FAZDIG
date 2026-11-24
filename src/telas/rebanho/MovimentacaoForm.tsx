@@ -510,7 +510,7 @@ export default function MovimentacaoForm() {
     const { data: r, error } = valor?.dados
       ? await supabase.rpc('lancar_compra_animais', { p: { mov: pedido, compra: valor.dados } })
       : cond?.dados
-        ? await supabase.rpc('lancar_entrada_parceria', { p: { mov: pedido, parceria: cond.dados } })
+        ? await supabase.rpc('lancar_entrada_parceria', { p: { mov: pedido, parceria: { ...cond.dados, venda_id: pv?.vendaId ?? '' } } })
         : acerto && parceria
           ? await supabase.rpc('lancar_saida_parceria', { p: { mov: pedido, parceria: parceria.id, acerto: { ...(acerto.acerto ?? {}), lote_destino: loteAcerto ?? '' } } })
           : await supabase.rpc('lancar_movimentacao', { p: pedido });

@@ -504,7 +504,7 @@ export default function VendaForm() {
         mapa.set(k, g);
       }
       const grupos = [...mapa.values()].filter((g) => g.cab > 0);
-      if (grupos.length) parceriaVenda = { venda: res.numero, pessoaId, data, grupos, parte: 1, partes: grupos.length };
+      if (grupos.length) parceriaVenda = { venda: res.numero, vendaId: (r as any)?.id ?? undefined, pessoaId, data, grupos, parte: 1, partes: grupos.length };
     }
     const fimVenda = (av: string) =>
       parceriaVenda ? navegacao.replace('MovimentacaoForm', { aviso: av, parceriaVenda }) : navegacao.replace('VendaForm', { aviso: av });

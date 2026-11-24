@@ -4105,3 +4105,29 @@ Banco: nada a rodar nesta versão.
 - NF e GTA ficam na venda; a entrada da parceria não pede os documentos
   (o estoque de terceiros do comprador já foi lançado pela venda).
 - Se escolher "Emitir NF" ao gravar, a NF-e abre primeiro; ao voltar dela, a parceria está esperando.
+
+---
+
+# Fazenda Digital V206 (instale por cima da V205)
+
+Banco: já atualizado direto no Supabase (nada a rodar). O arquivo banco\V206_banco.sql vai só para guardar.
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V206.
+
+## V206
+- Corrigido o erro "column venda_itens_1.custo_unitario does not exist" ao abrir a venda na consulta.
+  O banco da V198 não tinha entrado inteiro; agora entrou (vale também para o app que já está publicado):
+  - venda de produtos do estoque: custo médio, Custo dos Materiais Vendidos e receita em Venda de Materiais e Insumos;
+  - Atividades agrícolas com vários dias e horários.
+- Consulta da venda com "o gado ficou na fazenda":
+  - sem parceria registrada: botão "Registrar a parceria deste gado", que abre a Entrada por parceria
+    já preenchida (comprador, data, quantidade, sexo, faixa, raça, ferro e peso);
+  - com parceria registrada: mostra o nº da parceria e as cabeças.
+- A parceria fica ligada à venda (vale também para a que abre sozinha ao gravar a venda).
+- Venda não se altera: para corrigir, exclua e lance de novo (como já era).

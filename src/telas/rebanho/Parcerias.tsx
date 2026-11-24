@@ -79,7 +79,9 @@ export default function Parcerias() {
                 direita={`${formatarNumero(p.cabecas)} cab.`}
                 linhas={[
                   `Entrada em ${doBanco(p.dataEntrada)}${p.sexos ? ` · ${p.sexos}` : ''}${p.situacao === 'encerrada' && p.dataSaida ? ` · encerrada em ${doBanco(p.dataSaida)}` : ''}`,
-                  p.pesoKg != null ? `Peso de entrada ${formatarNumero(p.pesoKg, 1)} kg (média ${formatarNumero(p.pesoKg / Math.max(1, p.cabecas), 2)} kg)` : 'Peso de entrada não informado',
+                  // V209: peso bruto e médio por sexo
+                  ...(p.pesoSexo.length ? p.pesoSexo.map((l) => `Entrada · ${l}`) : ['Peso de entrada não informado']),
+                  p.pesoSexo.length > 1 && p.pesoKg != null ? `Total: peso bruto ${formatarNumero(p.pesoKg, 1)} kg · média ${formatarNumero(p.pesoKg / Math.max(1, p.cabecas), 2)} kg` : null,
                   p.idades ? `Idade na entrada: ${p.idades}` : null,
                   [p.racas && `Raça: ${p.racas}`, p.ferros && `Ferro: ${p.ferros}`].filter(Boolean).join(' · ') || null,
                   p.condicoes,

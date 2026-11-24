@@ -81,7 +81,18 @@ export default function ParceriaDetalhe() {
         <Dado rotulo="Data da entrada" valor={doBanco(p.dataEntrada)} />
         <Dado rotulo="Quantidade" valor={`${formatarNumero(p.cabecas)} cab.${abertas != null && p.situacao === 'aberta' ? ` · ${formatarNumero(abertas)} em aberto` : ''}`} />
         <Dado rotulo="Sexo" valor={p.sexos} />
-        <Dado rotulo="Peso de entrada" valor={p.pesoKg != null ? `${formatarNumero(p.pesoKg, 1)} kg · média ${formatarNumero(p.pesoKg / Math.max(1, p.cabecas), 2)} kg` : null} />
+        {/* V209: peso bruto e médio de entrada por sexo */}
+        {p.pesoSexo.length ? (
+          p.pesoSexo.map((l) => {
+            const [sx, resto] = [l.slice(0, l.indexOf(':')), l.slice(l.indexOf(':') + 2)];
+            return <Dado key={sx} rotulo={`Peso de entrada · ${sx}`} valor={resto} />;
+          })
+        ) : (
+          <Dado rotulo="Peso de entrada" valor={null} />
+        )}
+        {p.pesoSexo.length > 1 && p.pesoKg != null ? (
+          <Dado rotulo="Peso de entrada · total" valor={`peso bruto ${formatarNumero(p.pesoKg, 1)} kg · média ${formatarNumero(p.pesoKg / Math.max(1, p.cabecas), 2)} kg`} />
+        ) : null}
         <Dado rotulo="Idade na entrada" valor={p.idades} />
         <Dado rotulo="Raça" valor={p.racas} />
         <Dado rotulo="Ferro" valor={p.ferros} />
@@ -99,7 +110,9 @@ export default function ParceriaDetalhe() {
           </Text>
           {it.sexos ? <Text style={estilos.nota}>{it.sexos}{it.idades ? ` · ${it.idades}` : ''}</Text> : null}
           {it.racas || it.ferros ? <Text style={estilos.nota}>{[it.racas && `Raça: ${it.racas}`, it.ferros && `Ferro: ${it.ferros}`].filter(Boolean).join(' · ')}</Text> : null}
-          {it.pesoKg != null ? <Text style={estilos.nota}>Peso de entrada {formatarNumero(it.pesoKg, 1)} kg (média {formatarNumero(it.pesoKg / Math.max(1, it.cabecas), 2)} kg)</Text> : null}
+          {it.pesoSexo.map((l) => (
+            <Text key={l} style={estilos.nota}>Entrada · {l}</Text>
+          ))}
           {it.semLote > 0 && (
             <>
               <Text style={[estilos.nota, { color: cores.erro, fontWeight: '700' }]}>

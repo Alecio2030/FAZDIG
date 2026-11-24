@@ -15,6 +15,8 @@ export type ItemEntradaParceria = {
   idades: string; // faixas de idade na entrada
   racas: string;
   ferros: string;
+  /** V209: peso bruto e médio de entrada separados por sexo */
+  pesoSexo: string[];
 };
 
 export type ResumoParceria = {
@@ -36,6 +38,7 @@ export type ResumoParceria = {
   racas: string;
   ferros: string;
   semLote: number;
+  pesoSexo: string[];
 };
 
 const um = <T,>(x: T | T[] | null | undefined): T | null => (Array.isArray(x) ? x[0] ?? null : x ?? null);
@@ -57,6 +60,24 @@ function faixasNaEntrada(animais: { sexo: string | null; data_nascimento: string
     cont.set(k, (cont.get(k) ?? 0) + 1);
   }
   return [...cont.entries()].map(([k, n]) => `${formatarNumero(n)} de ${k}`).join(', ');
+}
+
+/** V209: "Machos: 10 cab. · peso bruto 3.500,0 kg · média 350,00 kg" (uma linha por sexo). */
+function pesoPorSexo(its: { peso_kg: number | null; animal: any }[]): string[] {
+  const linhas: string[] = [];
+  for (const [sx, nome] of [['M', 'Machos'], ['F', 'Fêmeas']] as const) {
+    const doSexo = its.filter((i) => (um<any>(i.animal)?.sexo ?? '').trim() === sx);
+    if (!doSexo.length) continue;
+    const comPeso = doSexo.filter((i) => i.peso_kg != null);
+    const kg = comPeso.reduce((s, i) => s + Number(i.peso_kg), 0);
+    let l = `${nome}: ${formatarNumero(doSexo.length)} cab.`;
+    if (comPeso.length) {
+      l += ` · peso bruto ${formatarNumero(kg, 1)} kg · média ${formatarNumero(kg / comPeso.length, 2)} kg`;
+      if (comPeso.length < doSexo.length) l += ` (peso de ${formatarNumero(comPeso.length)} cab.)`;
+    } else l += ' · peso não informado';
+    linhas.push(l);
+  }
+  return linhas;
 }
 
 export function textoCondicoes(p: any): string {
@@ -118,6 +139,7 @@ export async function lerParcerias(fid: string, filtro: { id?: string; situacao?
         idades: faixasNaEntrada(an, p.data_entrada),
         racas: juntar(an.map((a) => um<any>(a.raca)?.nome)),
         ferros: juntar(an.map((a) => um<any>(a.ferro)?.descricao)),
+        pesoSexo: pesoPorSexo(its),
       };
     });
     const todos = ms.flatMap((m) => ((m.itens ?? []) as any[]).map((i) => um<any>(i.animal)).filter(Boolean)) as any[];
@@ -140,6 +162,7 @@ export async function lerParcerias(fid: string, filtro: { id?: string; situacao?
       racas: juntar(todos.map((a) => um<any>(a.raca)?.nome)),
       ferros: juntar(todos.map((a) => um<any>(a.ferro)?.descricao)),
       semLote: itens.reduce((s, i) => s + i.semLote, 0),
+      pesoSexo: pesoPorSexo(ms.flatMap((m) => (m.itens ?? []) as any[])),
     };
   });
 }

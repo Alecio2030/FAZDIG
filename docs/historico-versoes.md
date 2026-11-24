@@ -4192,3 +4192,23 @@ Banco: já atualizado direto no Supabase (nada a rodar). O arquivo banco\V208_ba
 - A lista mostra só: Estoque atual (quantidade e unidade, em negrito), estoque mínimo (em vermelho, REPOR),
   custo unitário da última compra e custo médio atual.
 - Tocando no produto abre o resto: fornecedores, últimas compras, prazos, entradas e saídas.
+
+---
+
+# Fazenda Digital V209 (instale por cima da V208)
+
+Banco: nada a rodar nesta versão.
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V209.
+
+## V209 · Pecuário › Parcerias
+- Peso de entrada separado por sexo, na lista e na ficha:
+  Machos: cabeças · peso bruto · média; Fêmeas: cabeças · peso bruto · média.
+- Com machos e fêmeas, aparece também o total (peso bruto e média geral).
+- Na ficha, cada item da entrada também mostra o peso por sexo.

@@ -3992,7 +3992,30 @@ O banco do Supabase JÁ FOI ATUALIZADO (não precisa rodar nada lá).
 
 ---
 
-> As versões V154 a V202 não tiveram o LEIA-ME guardado aqui; o código abaixo já as inclui.
+> As versões V154 a V201 não tiveram o LEIA-ME guardado aqui; o código já as inclui.
+
+# Fazenda Digital V202 (instale por cima da V200 ou da V201; traz junto a V201)
+
+Banco: já atualizado direto no Supabase (nada a rodar). O arquivo banco\V202_banco.sql vai só para guardar.
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V202.
+
+## V202 · Vencimentos e alteração de compra
+- Nenhum vencimento pode ser antes da data da compra, da venda ou da emissão do título. A tela avisa
+  qual vencimento está errado, e o banco também recusa (vale para compra, despesa, venda e título avulso).
+- Alterar compra aberta pela Consulta (ou pelo Contas a pagar) estando em outra unidade dava
+  "Compra não encontrada" e nada era gravado: as datas voltavam. Agora a compra é gravada na fazenda dela.
+
+## V201 (junto) · Cadastro de lote em nova ordem
+- Animais do lote (sexo, quantidade, controle individual e relação) antes do Peso Bruto.
+
+---
 
 # Fazenda Digital V203 (instale por cima da V202)
 
@@ -4057,3 +4080,28 @@ Banco e servidor da NF-e: já atualizados direto no Supabase (nada a rodar). O a
   - a consulta da venda não mostra o botão "Emitir NF-e";
   - "Emitir NF-e de vendas" recusa essa venda (o banco também bloqueia).
   Assim não sai NF em duplicidade. Sem o nº, segue como antes: pergunta se emite agora ou depois.
+
+---
+
+# Fazenda Digital V205 (instale por cima da V204)
+
+Banco: nada a rodar nesta versão.
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V205.
+
+## V205 · Venda de gado que fica na fazenda
+- Com "O gado fica na fazenda" marcado, ao gravar a venda o sistema abre sozinho
+  Pecuário › Movimentações › Entrada por parceria, já preenchida com:
+  data, comprador (parceiro), quantidade, sexo, faixa de idade, raça, ferro e peso da venda.
+- Falta só informar o nº do lote e as condições (apascentamento ou rendimento) e lançar.
+- Venda com sexos ou faixas de idade diferentes: a parceria abre em partes (uma por sexo e faixa);
+  ao lançar uma, abre a próxima.
+- NF e GTA ficam na venda; a entrada da parceria não pede os documentos
+  (o estoque de terceiros do comprador já foi lançado pela venda).
+- Se escolher "Emitir NF" ao gravar, a NF-e abre primeiro; ao voltar dela, a parceria está esperando.

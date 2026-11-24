@@ -14,7 +14,10 @@ import Aviso from '../../componentes/Aviso';
 import Escolha from '../../componentes/Escolha';
 import Secao from '../../componentes/Secao';
 import SeletorLista, { type ItemLista } from '../../componentes/SeletorLista';
-import ItensVendaGado, { itemGadoVazio, itensGadoParaBanco, calcItem, cabecasItem, useLotesVenda, validarItensGado, type ItemGado, type SaldoFaixa } from '../../componentes/ItensVendaGado';
+import ItensVendaGado, { itemGadoVazio, itensGadoParaBanco, calcItem, cabecasItem, sexoItem, useLotesVenda, validarItensGado, type ItemGado, type SaldoFaixa } from '../../componentes/ItensVendaGado';
+import { faixaDaIdade } from '../../lib/faixas';
+import { mesesEntre } from '../../lib/rebanho';
+import type { GrupoParceriaVenda, ParceriaDaVenda } from '../../lib/movimentacoes';
 import Interruptor from '../../componentes/Interruptor';
 import CampoBuscaRapida, { type ItemRapido } from '../../componentes/CampoBuscaRapida';
 import CampoPessoaBusca from '../../componentes/CampoPessoaBusca';
@@ -482,8 +485,31 @@ export default function VendaForm() {
         : deCafe
           ? `Venda nº ${res.numero} gravada: ${textoSacas(sacasCafe)} de café saíram do armazém, ${formatarMoeda(Number(res.liquido))} ${comp > 0 ? 'no total' : 'a receber'} (${receber}).${textoContrato}`
           : `Venda nº ${res.numero} gravada: ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`;
+    // V205: o gado fica na fazenda: depois da venda abre a Entrada por parceria já preenchida (um grupo por sexo e faixa de idade)
+    let parceriaVenda: ParceriaDaVenda | null = null;
+    if (deAnimais && gadoFica && pessoaId) {
+      const iso = paraBanco(data) ?? hojeBanco();
+      const mapa = new Map<string, GrupoParceriaVenda>();
+      for (const it of itensGado) {
+        const l = it.lote.trim() ? lotesVenda.find((y) => String(y.numero) === it.lote.trim()) ?? null : null;
+        const sx = sexoItem(it, lotesVenda);
+        const de = it.faixa ? Number(it.faixa) : sx && l?.nascimento_ref ? faixaDaIdade(sx, mesesEntre(l.nascimento_ref, iso)).de : null;
+        const faixa = sx && de !== null ? `${sx}${de}` : '';
+        const racaId = it.racaId ?? l?.raca_id ?? null;
+        const ferroId = it.ferroId ?? l?.ferro_id ?? null;
+        const k = `${sx}|${faixa}|${racaId ?? ''}|${ferroId ?? ''}`;
+        const g = mapa.get(k) ?? { cab: 0, sexo: sx, faixa, racaId, ferroId, peso: 0 };
+        g.cab += cabecasItem(it);
+        g.peso += n(it.peso) ?? 0;
+        mapa.set(k, g);
+      }
+      const grupos = [...mapa.values()].filter((g) => g.cab > 0);
+      if (grupos.length) parceriaVenda = { venda: res.numero, pessoaId, data, grupos, parte: 1, partes: grupos.length };
+    }
+    const fimVenda = (av: string) =>
+      parceriaVenda ? navegacao.replace('MovimentacaoForm', { aviso: av, parceriaVenda }) : navegacao.replace('VendaForm', { aviso: av });
     // V160: ao fechar a venda, pergunta se emite a NF-e agora (se já tem o nº da nota, foi emitida fora)
-    if (documento.trim()) return navegacao.replace('VendaForm', { aviso: `${textoAviso} NF nº ${documento.trim()} emitida fora do sistema: não se emite outra NF-e para esta venda.` });
+    if (documento.trim()) return fimVenda(`${textoAviso} NF nº ${documento.trim()} emitida fora do sistema: não se emite outra NF-e para esta venda.`);
     let vendaId: string | null = (r as any)?.id ?? null;
     if (!vendaId) {
       const { data: vx } = await supabase.from('vendas').select('id').eq('fazenda_id', fid!).eq('numero', res.numero).maybeSingle();
@@ -493,9 +519,20 @@ export default function VendaForm() {
       {
         text: 'Agora não',
         style: 'cancel',
-        onPress: () => navegacao.replace('VendaForm', { aviso: `${textoAviso} Para emitir a nota depois (sozinha ou junto com outras vendas do mesmo cliente): Mais › Notas fiscais › Emitir NF-e de vendas, com o nº ${res.numero}.` }),
+        onPress: () => fimVenda(`${textoAviso} Para emitir a nota depois (sozinha ou junto com outras vendas do mesmo cliente): Mais › Notas fiscais › Emitir NF-e de vendas, com o nº ${res.numero}.`),
       },
-      { text: 'Emitir NF', onPress: () => (vendaId ? navegacao.replace('NotaFiscalEmitir', { vendaId }) : navegacao.replace('VendaForm', { aviso: textoAviso })) },
+      {
+        text: 'Emitir NF',
+        onPress: () => {
+          if (!vendaId) return fimVenda(textoAviso);
+          // V205: com parceria, a NF-e abre por cima; ao voltar dela, a parceria está esperando
+          if (parceriaVenda) {
+            navegacao.replace('MovimentacaoForm', { aviso: textoAviso, parceriaVenda });
+            return navegacao.push('NotaFiscalEmitir', { vendaId });
+          }
+          navegacao.replace('NotaFiscalEmitir', { vendaId });
+        },
+      },
     ]);
   }
 
@@ -658,7 +695,7 @@ export default function VendaForm() {
           )}
           <Interruptor
             rotulo="O gado fica na fazenda"
-            descricao={gadoFica ? 'Sai do nosso estoque e entra no estoque de terceiros do comprador (parceria), na fazenda.' : 'Marque se o comprador deixa o gado aqui, em parceria.'}
+            descricao={gadoFica ? 'Sai do nosso estoque e entra no estoque de terceiros do comprador (parceria), na fazenda. Ao gravar, abre a Entrada por parceria já preenchida para você informar o lote e as condições.' : 'Marque se o comprador deixa o gado aqui, em parceria.'}
             valor={gadoFica}
             aoMudar={setGadoFica}
           />

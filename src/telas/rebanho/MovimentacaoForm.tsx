@@ -88,6 +88,24 @@ export default function MovimentacaoForm() {
   const [erro, setErro] = useState<string | null>(null);
   const [erros, setErros] = useState<Record<string, string>>({});
 
+  // V205: venda com "o gado fica na fazenda": já abre a Entrada por parceria com os dados da venda (um grupo por vez)
+  const pv = params?.parceriaVenda;
+  const grupoPv = pv?.grupos[0];
+  useEffect(() => {
+    if (!pv || !grupoPv) return;
+    escolherTipo('entrada_parceria');
+    setData(pv.data);
+    setPessoaId(pv.pessoaId);
+    setQuantidade(String(grupoPv.cab));
+    if (grupoPv.sexo) setSexo([grupoPv.sexo]);
+    setRacaId(grupoPv.racaId);
+    setFerroId(grupoPv.ferroId);
+    if (grupoPv.faixa) setNasc({ ...NASCIMENTO_FAIXA, faixa: grupoPv.faixa });
+    setPeso(grupoPv.peso > 0 ? numeroParaCampo(grupoPv.peso) : '');
+    setObs(`Gado da venda nº ${pv.venda} que ficou na fazenda (parceria).`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const entrada = !!tipo && ENTRADAS.includes(tipo);
   const saida = !!tipo && SAIDAS.includes(tipo);
   const baseIso = paraBanco(data) ?? hojeBanco();
@@ -543,6 +561,11 @@ export default function MovimentacaoForm() {
     }
     if (loteCriado) aviso += ` Lote nº ${loteCriado} cadastrado (manga e outros dados completam-se em Pecuário › Lotes).`;
     aviso += avisoDoc;
+    // V205: venda com sexos/faixas diferentes: abre a próxima parte da parceria
+    if (pv && pv.grupos.length > 1) {
+      const parte = (pv.parte ?? 1) + 1;
+      return navegacao.replace('MovimentacaoForm', { aviso: `${aviso} Agora a parte ${parte} de ${pv.partes ?? pv.grupos.length}.`, parceriaVenda: { ...pv, grupos: pv.grupos.slice(1), parte } });
+    }
     navegacao.replace('MovimentacaoForm', { aviso });
   }
 
@@ -562,7 +585,8 @@ export default function MovimentacaoForm() {
   const sexoTravado = entrada && destino?.sexo;
   const sexoAtual = (destino?.sexo ?? sexo[0]) as 'M' | 'F' | undefined;
   const usaAnimais = saida || tipo === 'transferencia_lote';
-  const comNfGta = tipo !== 'nascimento' && tipo !== 'morte';
+  // V205: na parceria aberta pela venda, NF e GTA ficam na venda (o estoque de terceiros já foi lançado por ela)
+  const comNfGta = tipo !== 'nascimento' && tipo !== 'morte' && !pv;
   // V182: escolhido o tipo, só o grupo dele fica na tela (ex.: no Nascimento e na Compra somem Saídas e Transferências)
   const grupos = tipo ? GRUPOS_MOV.filter((g) => g.tipos.some((t) => t.valor === tipo)) : GRUPOS_MOV;
 
@@ -581,7 +605,13 @@ export default function MovimentacaoForm() {
       }
     >
       {abas}
-      {avisoAnterior && !tipo && <Aviso tipo="sucesso" texto={avisoAnterior} />}
+      {avisoAnterior && (!tipo || !!pv) && <Aviso tipo="sucesso" texto={avisoAnterior} />}
+      {pv && grupoPv && tipo === 'entrada_parceria' && (
+        <Aviso
+          tipo="info"
+          texto={`Venda nº ${pv.venda}: o gado ficou na fazenda. Registre a parceria${(pv.partes ?? pv.grupos.length) > 1 ? ` (parte ${pv.parte ?? 1} de ${pv.partes ?? pv.grupos.length}: um lançamento para cada sexo e faixa de idade)` : ''}: confira os dados, informe o nº do lote e as condições (apascentamento ou rendimento). A NF e a GTA ficam na venda, e o estoque de terceiros do comprador já foi lançado por ela.`}
+        />
+      )}
       {erro && <Aviso tipo="erro" texto={erro} />}
 
       {grupos.map((g) => (

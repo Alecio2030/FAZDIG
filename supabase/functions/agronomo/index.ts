@@ -1,6 +1,9 @@
 // Agrônomo virtual do Fazenda Digital.
-//  - acao "ler_laudo": lê a foto do laudo de análise de solo ou foliar e devolve os valores em unidades padrão (para a tela de conferência).
-//  - acao "parecer": interpreta uma análise já conferida, junto com os dados do talhão e as contas que o app já fez, e devolve um parecer técnico.
+//  - acao "ler_laudo": lê a foto ou o PDF de um laudo de laboratório agrícola e devolve os valores em unidades padrão
+//    (para a tela de conferência). V166: além de solo e foliar, lê fertilizante orgânico e corretivo (calcário),
+//    e a coluna de valores de referência do laboratório, quando houver.
+//  - acao "parecer": interpreta uma análise já conferida, junto com os dados do talhão e as contas que o app já fez.
+//    V167: parecer curto (o sistema já mostra o que está fora do padrão), para responder em menos de 1 minuto.
 // A chave da IA fica só aqui no servidor (secret ANTHROPIC_API_KEY).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
@@ -21,12 +24,14 @@ function papel(req: Request): string | null {
   }
 }
 
-async function guardarFoto(b64: string, formato: string): Promise<string | null> {
+const FORMATOS: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
+
+async function guardarArquivo(b64: string, formato: string): Promise<string | null> {
   try {
     const url = Deno.env.get('SUPABASE_URL');
     const chave = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     if (!url || !chave) return null;
-    const ext = formato === 'image/png' ? 'png' : formato === 'image/webp' ? 'webp' : 'jpg';
+    const ext = FORMATOS[formato] ?? 'jpg';
     const caminho = `analises/${new Date().toISOString().slice(0, 7)}/${crypto.randomUUID()}.${ext}`;
     const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const r = await fetch(`${url}/storage/v1/object/documentos/${caminho}`, {
@@ -35,12 +40,12 @@ async function guardarFoto(b64: string, formato: string): Promise<string | null>
       body: bin,
     });
     if (!r.ok) {
-      console.error('foto', r.status, (await r.text()).slice(0, 300));
+      console.error('arquivo', r.status, (await r.text()).slice(0, 300));
       return null;
     }
     return caminho;
   } catch (e) {
-    console.error('foto', String(e));
+    console.error('arquivo', String(e));
     return null;
   }
 }
@@ -48,12 +53,19 @@ async function guardarFoto(b64: string, formato: string): Promise<string | null>
 const MODELO = 'claude-sonnet-5-5';
 const MODELO_RESERVA = 'claude-haiku-4-5-20251001';
 
-const PROMPT_LAUDO = `Você lê a foto de um laudo de laboratório agrícola: análise química de SOLO ou análise FOLIAR (tecido vegetal). O laudo pode ter várias amostras (linhas ou colunas).
+const PROMPT_LAUDO = `Você lê um laudo de laboratório agrícola (foto ou PDF). Pode ser de quatro tipos:
+- "solo": análise química de solo;
+- "foliar": análise química de folhas / tecido vegetal / plantas;
+- "organico": análise de fertilizante orgânico (esterco, cama de frango, composto, torta...);
+- "corretivo": análise de corretivo de acidez (calcário, calcário dolomítico, cal...).
+O laudo pode ter várias amostras (linhas ou colunas).
 Responda SOMENTE com um JSON válido, sem texto antes ou depois, sem crases, neste formato:
 {"legivel": true|false,
- "tipo": "solo"|"foliar",
+ "tipo": "solo"|"foliar"|"organico"|"corretivo",
  "laboratorio": string|null, "numero_laudo": string|null, "data": "aaaa-mm-dd"|null,
- "amostras": [{"identificacao": string|null, "profundidade": string|null, "valores": {...}, "conversoes": [string]}],
+ "cliente": string|null, "propriedade": string|null, "cultura": string|null,
+ "base": "seca"|"umida"|null,
+ "amostras": [{"identificacao": string|null, "profundidade": string|null, "valores": {...}, "referencias": {...}, "conversoes": [string]}],
  "nao_lido": [string]}
 "valores" traz só os parâmetros que estão no laudo, com estas chaves e SEMPRE nestas unidades (converta quando o laudo usar outra):
 SOLO:
@@ -63,42 +75,58 @@ SOLO:
 - "na": sódio, mg/dm3
 - "ca", "mg", "al", "h_al" (H+Al), "sb" (soma de bases), "t" (CTC efetiva), "ctc" (CTC a pH 7, T): cmolc/dm3 (se vier em mmolc/dm3, divida por 10)
 - "v": saturação por bases, %; "m": saturação por alumínio, %
-- "mo": matéria orgânica, dag/kg (= %; se vier em g/kg ou g/dm3, divida por 10)
+- "mo": matéria orgânica, dag/kg (= dag/dm3 = %; se vier em g/kg ou g/dm3, divida por 10)
 - "p_rem": fósforo remanescente, mg/L
 - "s", "b", "cu", "fe", "mn", "zn": mg/dm3
 - "argila": %
 FOLIAR:
 - "n", "p", "k", "ca", "mg", "s": g/kg (se vier em dag/kg ou %, multiplique por 10)
 - "b", "cu", "fe", "mn", "zn": mg/kg (ppm = mg/kg)
+ORGANICO (todos em %, como no laudo; "%m/m" = %):
+- "umidade", "ph" (o pH que estiver, sem unidade), "mo" (matéria orgânica total), "c" (carbono orgânico), "cn" (relação C/N, sem unidade)
+- "n" (N total), "p2o5" (fósforo total como P2O5; se vier como P, multiplique por 2,29), "k2o" (potássio como K2O; se vier como K, multiplique por 1,205)
+- "ca", "mg", "s", "fe", "zn", "cu", "mn", "b", "na": % (se vier em mg/kg ou ppm, divida por 10.000)
+- "base": "seca" se o laudo disser que os teores são em base seca (matéria seca, 65 °C), "umida" se disser base úmida / natural / como recebido; null se não disser.
+CORRETIVO (todos em %):
+- "umidade"
+- "peneira10", "peneira20", "peneira50": percentual que PASSA nas peneiras ABNT nº 10 (2 mm), nº 20 (0,84 mm) e nº 50 (0,30 mm)
+- "pn": poder de neutralização (% ECaCO3)
+- "re": reatividade, se o laudo trouxer
+- "prnt": poder relativo de neutralização total
+- "cao", "mgo": óxidos de cálcio e de magnésio; "soma_oxidos": CaO + MgO
+- se vier Ca ou Mg em vez dos óxidos: CaO = Ca x 1,399; MgO = Mg x 1,658 (registre a conversão)
+"referencias": quando o laudo tiver uma coluna de valor de referência / valor adequado / faixa ideal, traga para cada chave {"min": número|null, "max": número|null}, já nas MESMAS unidades de "valores" (converta igual). Valor único vira min = max. Sem coluna de referência: {}. Relações entre nutrientes (N/K, Ca/Mg...) não entram.
 Regras:
-- Números com ponto decimal, sem separador de milhar.
+- Números com ponto decimal, sem separador de milhar (o laudo brasileiro usa vírgula decimal: "33,25" é 33.25).
 - "conversoes": descreva em português cada conversão de unidade que você fez naquela amostra (ex.: "K de 0,15 cmolc/dm3 para 58,7 mg/dm3"); [] se não converteu nada.
 - "identificacao": o nome/descrição da amostra como está no laudo (talhão, gleba, número). "profundidade": como está no laudo (ex.: "0-20").
-- "data": a data do laudo ou da emissão (não invente).
+- "data": a data do laudo ou da emissão (não invente). "cliente", "propriedade" e "cultura": como estão no laudo.
 - Não invente nem complete: valor ilegível ou duvidoso fica fora de "valores" e o nome dele vai em "nao_lido". "<" ou "traços" (abaixo do limite de detecção): use 0 e avise em "conversoes".
 - "legivel" é false só se não der para ler quase nada.`;
 
 const PROMPT_PARECER = `Você é um engenheiro agrônomo especialista em fertilidade do solo e nutrição de plantas, com foco em café conilon no Espírito Santo. Vai receber, em JSON, os dados de um talhão, uma análise de solo ou foliar já conferida pelo produtor e as contas que o sistema já fez. Escreva um parecer prático para o produtor.
 
-REFERÊNCIAS QUE O SISTEMA USA (Incaper; Prezotti et al., 2007, Manual de recomendação de calagem e adubação para o ES, 5a aproximação; Guarçoni, 2017; Partelli et al., 2016):
+REFERÊNCIAS QUE O SISTEMA USA (Incaper; Prezotti et al., 2007, Manual de recomendação de calagem e adubação para o ES, 5a aproximação; Guarçoni, 2017; Partelli et al., 2016; CFSEMG, 1999, 5a Aproximação, para as classes de solo):
 - Calagem pelo método da saturação por bases: NC (t/ha, PRNT 100, incorporado a 20 cm) = T x (Ve - Va) / 100. Ve para café conforme a CTC a pH 7 (T): T < 4,3 cmolc/dm3 -> 80%; 4,3 a 8,6 -> 70%; acima de 8,6 -> 60%. Em cobertura (lavoura formada, sem incorporar) usa-se metade da dose. Corrigir pelo PRNT (x 100/PRNT). Em geral calcário dolomítico (>= 12% de MgO). Doses altas em cobertura costumam ser parceladas.
 - Relação Ca:Mg no solo desejável para o conilon: em torno de 4:1.
 - Adubação de produção do conilon (kg/ha/ano), por produtividade esperada (sc/ha) -> N; e K2O conforme o K do solo (<60 | 60-120 | 120-200 | >200 mg/dm3): 20-30 sc: N 260; K2O 230|160|90|0. 31-50: 320; 290|220|150|0. 51-70: 380; 350|280|210|80. 71-100: 440; 410|340|270|140. 101-130: 500; 470|400|330|200. 131-170: 560; 530|460|390|260. >170: 620; 600|520|450|320.
 - Épocas da adubação de produção: floração (ago/set), chumbinho (nov/dez) e granação (fev/mar); em lavoura irrigada/fertirrigada, parcelar mais, acompanhando a demanda (maior de outubro a março).
 - Eficiência de aproveitamento: sequeiro N 40-50%, P2O5 25-30%, K2O 60-70%; aspersão N 60-70%, K2O 70-80%; gotejamento/microaspersão N 75-85%, P2O5 25-40%, K2O 80-90%.
 - Faixas de suficiência foliar do conilon de alta produtividade (Norte do ES). Pré-florada: N 23,1-28,7; P 1,01-1,44; K 9,90-14,9; Ca 15,2-26,5; Mg 2,57-4,65; S 1,02-1,71 g/kg; B 50,7-99,2; Cu 4,36-14,5; Fe 67,0-195; Mn 62,4-226; Zn 4,85-8,05 mg/kg. Granação: N 25,2-30,6; P 1,10-1,53; K 13,0-18,8; Ca 13,8-22,6; Mg 2,53-4,11; S 1,05-1,85 g/kg; B 57,6-102; Cu 6,41-19,8; Fe 67,3-145; Mn 50,4-188; Zn 5,36-17,3 mg/kg.
+- Quando vier "referencias_do_laboratorio" (a faixa que o próprio laudo traz), use-a para os parâmetros que não têm faixa acima e diga de onde veio cada faixa.
 
 REGRAS:
-- Os números em "calculo" (calagem, N, K2O, classes foliares) foram calculados pelo sistema com as tabelas acima: NÃO os recalcule com outro critério nem os contradiga; explique-os e diga como aplicar (dose por planta, parcelamento, cuidado).
+- Os números em "calculo" (calagem, N, K2O, classes) foram calculados pelo sistema: NÃO os recalcule com outro critério nem os contradiga; explique-os e diga como aplicar (dose por planta, parcelamento, cuidado).
 - Para o que não está nas tabelas acima (fósforo, enxofre, micronutrientes no solo, gessagem, matéria orgânica, pH, alumínio, lavoura em formação, outras culturas), use o seu conhecimento das recomendações oficiais brasileiras (5a aproximação do ES e de MG, Embrapa) e deixe claro, em "confianca", que esses pontos são orientação geral a confirmar.
-- Classifique cada parâmetro da análise (muito baixo, baixo, médio, adequado, alto ou muito alto) com um comentário curto de uma linha.
+- O sistema já classificou cada parâmetro ("classes_pelo_sistema" e "fora_do_padrao_pelo_sistema") e o produtor já vê isso na tela: NÃO repita a classificação parâmetro por parâmetro; concentre-se em COMO corrigir e aplicar.
+- Seja breve: cada campo com 1 a 3 frases curtas; o texto inteiro com no máximo umas 350 palavras.
 - Linguagem simples e direta, de técnico para produtor. Doses em kg/ha e, quando houver plantas por hectare, também em gramas por planta. Sem marcas comerciais.
 - Não receite defensivos. Não invente dados que não recebeu; se faltar algo importante (ex.: P-rem, argila, análise de 20-40 cm, produtividade), diga em "proximos_passos".
 - Se a cultura não for café conilon, avise que as tabelas do sistema são do conilon e dê a orientação geral para a cultura informada.
+- Tudo é sugestão: o texto não substitui a recomendação do engenheiro agrônomo responsável.
 
 Responda SOMENTE com um JSON válido, sem texto antes ou depois, sem crases, neste formato:
 {"resumo": string (3 a 5 frases: como está o solo ou a planta e o que mais limita a produção),
- "parametros": [{"nome": string, "valor": string, "classe": "muito baixo"|"baixo"|"médio"|"adequado"|"alto"|"muito alto", "comentario": string}],
  "calagem": string|null,
  "gessagem": string|null,
  "adubacao": {"nitrogenio": string|null, "fosforo": string|null, "potassio": string|null, "outros": string|null},
@@ -126,19 +154,25 @@ Deno.serve(async (req: Request) => {
   let arquivo: Promise<string | null> = Promise.resolve(null);
   let maximo = 4000;
   if (corpo.acao === 'ler_laudo') {
-    if (!corpo.imagem || corpo.imagem.length < 1000) return resposta({ erro: 'Foto não recebida.' }, 400);
-    if (corpo.imagem.length > 6_500_000) return resposta({ erro: 'Foto grande demais. Tire de novo, com o papel ocupando a tela.' }, 413);
-    const formato = ['image/jpeg', 'image/png', 'image/webp'].includes(corpo.formato ?? '') ? corpo.formato! : 'image/jpeg';
+    if (!corpo.imagem || corpo.imagem.length < 1000) return resposta({ erro: 'Arquivo não recebido.' }, 400);
+    const pdf = corpo.formato === 'application/pdf';
+    if (corpo.imagem.length > (pdf ? 30_000_000 : 6_500_000)) {
+      return resposta({ erro: pdf ? 'PDF grande demais (até uns 20 MB).' : 'Foto grande demais. Tire de novo, com o papel ocupando a tela.' }, 413);
+    }
+    const formato = pdf ? 'application/pdf' : ['image/jpeg', 'image/png', 'image/webp'].includes(corpo.formato ?? '') ? corpo.formato! : 'image/jpeg';
     conteudo = [
-      { type: 'image', source: { type: 'base64', media_type: formato, data: corpo.imagem } },
+      pdf
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: corpo.imagem } }
+        : { type: 'image', source: { type: 'base64', media_type: formato, data: corpo.imagem } },
       { type: 'text', text: PROMPT_LAUDO },
     ];
-    arquivo = guardarFoto(corpo.imagem, formato);
+    maximo = 6000;
+    arquivo = guardarArquivo(corpo.imagem, formato);
   } else if (corpo.acao === 'parecer') {
     const ctx = JSON.stringify(corpo.contexto ?? {});
-    if (ctx.length < 20 || ctx.length > 20000) return resposta({ erro: 'Dados da análise inválidos.' }, 400);
+    if (ctx.length < 20 || ctx.length > 30000) return resposta({ erro: 'Dados da análise inválidos.' }, 400);
     conteudo = [{ type: 'text', text: `${PROMPT_PARECER}\n\nDADOS:\n${ctx}` }];
-    maximo = 3500;
+    maximo = 2000;
   } else {
     return resposta({ erro: 'Ação não suportada.' }, 400);
   }
@@ -167,7 +201,7 @@ Deno.serve(async (req: Request) => {
         erro:
           r.status === 401 ? 'A chave da IA não foi aceita. Confira o secret ANTHROPIC_API_KEY.'
           : r.status === 400 && /credit/i.test(t) ? 'Sem crédito na conta da IA. Compre créditos em platform.claude.com › Billing.'
-          : r.status === 413 || (r.status === 400 && /image/i.test(t)) ? 'Foto grande demais para a leitura. Tire de novo, com o papel ocupando a tela.'
+          : r.status === 413 || (r.status === 400 && /image|document|pdf/i.test(t)) ? 'Arquivo grande demais ou ilegível para a leitura. Tente uma foto mais de perto ou outro PDF.'
           : r.status === 429 || r.status === 529 ? 'A IA está ocupada. Tente de novo em instantes.'
           : 'Não foi possível consultar a IA agora.',
         arquivo: caminho,

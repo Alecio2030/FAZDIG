@@ -2,7 +2,7 @@
 
 Sistema gerencial agropecuário: pecuária, agricultura (com o ciclo completo do café), frota e financeiro, para produtores com várias fazendas. Roda no celular (iPhone e Android) e no computador, pelo navegador.
 
-Versão atual: **V204** (24/11/2026).
+Versão atual: **V205** (24/11/2026).
 
 ## Linguagem e tecnologia
 
@@ -31,7 +31,7 @@ src/
   config.ts     endereço do Supabase e número da versão
 supabase/
   functions/        código das funções na nuvem (IA, satélite, contabilidade)
-  historico-sql/    arquivos de atualização do banco (V130 a V153, V203 em diante; de V154 a V202 o banco foi atualizado direto no Supabase)
+  historico-sql/    arquivos de atualização do banco de cada versão (as que faltam foram rodadas direto no Supabase)
 docs/
   historico-versoes.md   o LEIA-ME de cada versão entregue
   banco-de-dados.md      mapa do banco (tabelas, funções, agendamentos)

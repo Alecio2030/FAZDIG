@@ -29,6 +29,10 @@ export const ROTULO_MOV: Record<string, string> = {
   transferencia_entrada: 'Entrada de outra fazenda',
 };
 
+/** V205: venda de gado que fica na fazenda: a Entrada por parceria abre preenchida, um grupo por sexo e faixa. */
+export type GrupoParceriaVenda = { cab: number; sexo: 'M' | 'F' | ''; faixa: string; racaId: string | null; ferroId: string | null; peso: number };
+export type ParceriaDaVenda = { venda: number; pessoaId: string; data: string; grupos: GrupoParceriaVenda[]; parte?: number; partes?: number };
+
 export const ENTRADAS: TipoMov[] = ['nascimento', 'compra', 'entrada_parceria'];
 export const SAIDAS: TipoMov[] = ['venda', 'morte', 'saida_parceria'];
 

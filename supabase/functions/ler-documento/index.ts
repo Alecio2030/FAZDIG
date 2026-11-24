@@ -62,7 +62,7 @@ Responda SOMENTE com um JSON válido, sem texto antes ou depois, sem crases, nes
  "numero": string|null, "serie": string|null, "chave": string|null,
  "codigo_barras": string|null,
  "data_emissao": "aaaa-mm-dd"|null,
- "itens": [{"codigo": string|null, "descricao": string, "unidade": string|null, "quantidade": number|null, "valor_unitario": number|null, "valor_total": number|null, "valor_icms": number|null, "valor_ipi": number|null, "valor_icms_st": number|null, "lote": string|null, "validade": "aaaa-mm-dd"|null}],
+ "itens": [{"codigo": string|null, "descricao": string, "unidade": string|null, "quantidade": number|null, "valor_unitario": number|null, "valor_total": number|null, "desconto": number|null, "valor_icms": number|null, "valor_ipi": number|null, "valor_icms_st": number|null, "lote": string|null, "validade": "aaaa-mm-dd"|null}],
  "frete": number|null, "seguro": number|null, "outras_despesas": number|null, "desconto": number|null, "valor_ipi": number|null, "valor_icms_st": number|null, "valor_total": number|null,
  "duplicatas": [{"vencimento": "aaaa-mm-dd", "valor": number}],
  "notas_transportadas": [{"chave": string|null, "numero": string|null}],
@@ -81,10 +81,11 @@ Regras:
 - "duplicatas": no DANFE, o quadro "FATURA / DUPLICATA(S)" (cada duplicata com vencimento e valor). Se não houver esse quadro, procure vencimento em "dados adicionais", no boleto ou na fatura. Conta de consumo: a data de vencimento da fatura. NUNCA use a data de emissão como vencimento; sem vencimento escrito, "duplicatas" fica [] e "vencimentos" vai em "nao_lido".
 - "numero": o campo "Nº" do quadro do alto do DANFE, com os zeros à esquerda como estão impressos.
 - "chave": fica embaixo do código de barras, em 11 grupos de 4 números ("CHAVE DE ACESSO"). Leia com cuidado: é o dado mais importante da nota.
-- Itens: cada linha da tabela de produtos é UM item (não repita linhas). "valor_unitario" = coluna V. UNIT./VALOR UNITÁRIO; "valor_total" = coluna V. TOTAL/VALOR TOTAL da linha (não o unitário). Confira: quantidade × valor_unitario ≈ valor_total.
+- Itens: cada linha da tabela de produtos é UM item (não repita linhas). Liste TODAS as linhas, uma por produto, mesmo que sejam muitas (inclusive as da continuação no verso ou em outra folha); NUNCA junte produtos diferentes num item só nem resuma como "diversos". "valor_unitario" = coluna V. UNIT./VALOR UNITÁRIO; "valor_total" = coluna V. TOTAL/VALOR TOTAL da linha (não o unitário), ANTES do desconto. Confira: quantidade × valor_unitario ≈ valor_total.
+- "desconto" do item = coluna DESC./V. DESC./DESCONTO da própria linha, em R$ (null se a coluna não existir ou estiver vazia ou zerada). Se o desconto vier só em %, calcule em R$ sobre quantidade × valor_unitario. Em recibo, pedido, orçamento aprovado ou cupom de balcão, o desconto escrito na linha do produto também vai aqui.
 - "destinatario": o quadro DESTINATÁRIO/REMETENTE (quem comprou): nome e CPF/CNPJ dígito a dígito.
 - Impostos por item, das colunas da tabela de produtos: "valor_icms" = V. ICMS, "valor_ipi" = V. IPI, "valor_icms_st" = ICMS ST da linha (null se a coluna não existir ou estiver vazia).
-- Quadro Cálculo do Imposto: "frete" = VALOR DO FRETE, "seguro" = VALOR DO SEGURO, "desconto" = DESCONTO, "outras_despesas" = OUTRAS DESPESAS ACESSÓRIAS, "valor_ipi" = VALOR DO IPI, "valor_icms_st" = VALOR DO ICMS SUBSTITUIÇÃO.
+- Quadro Cálculo do Imposto: "frete" = VALOR DO FRETE, "seguro" = VALOR DO SEGURO, "desconto" = DESCONTO (o total de descontos da nota, que inclui os das linhas; num recibo ou pedido sem esse quadro, o desconto dado sobre a compra toda), "outras_despesas" = OUTRAS DESPESAS ACESSÓRIAS, "valor_ipi" = VALOR DO IPI, "valor_icms_st" = VALOR DO ICMS SUBSTITUIÇÃO.
 - "valor_total" da nota = "V. TOTAL DA NOTA" (quadro Cálculo do Imposto). Confira: soma dos itens + frete + seguro + outras despesas + IPI + ICMS-ST − desconto ≈ valor total da nota; se não bater, releia os itens.
 - DACTE (o papel traz "DACTE" ou "Documento Auxiliar do Conhecimento de Transporte Eletrônico"): "tipo_documento" = "cte". "emitente" = a TRANSPORTADORA (quadro do alto, ao lado do logotipo). "destinatario" = o TOMADOR DO SERVIÇO (quem paga o frete); se o quadro do tomador não existir, o DESTINATÁRIO. "numero" e "serie" = os do CT-e. "chave" = a chave de acesso do CT-e (embaixo do código de barras). "itens" = UM item só: "descricao": "Frete", "quantidade": 1, "valor_unitario" e "valor_total" = VALOR TOTAL DO SERVIÇO (ou VALOR TOTAL DA PRESTAÇÃO), "valor_icms" = VALOR DO ICMS do quadro de impostos (null se isento ou vazio); os componentes do frete (frete peso, pedágio, etc.) NÃO viram itens. "frete", "seguro", "outras_despesas" e "desconto" ficam null. "valor_total" = VALOR A RECEBER (ou o valor total do serviço). "notas_transportadas" = cada linha do quadro DOCUMENTOS ORIGINÁRIOS: "chave" = a chave de 44 dígitos da NF-e transportada, só os dígitos e só se inteira e legível (senão null); "numero" = o número da nota, se estiver escrito (senão null). Nunca invente chave.
 - Em qualquer documento que não seja DACTE, "notas_transportadas" fica [].
@@ -180,7 +181,7 @@ Deno.serve(async (req: Request) => {
       headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
         model: modelo,
-        max_tokens: 4000,
+        max_tokens: 8000,
         messages: [
           {
             role: 'user',

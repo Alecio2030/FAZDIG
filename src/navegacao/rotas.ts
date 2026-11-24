@@ -1,4 +1,5 @@
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { ParceriaDaVenda } from '../lib/movimentacoes';
 
 export type TipoArea = 'manga' | 'talhao';
 
@@ -155,7 +156,8 @@ export type PilhaParams = {
   AnimalForm: { id?: string; loteId?: string; aba?: 'cadastrar' | 'consultar' };
   LoteForm: { id?: string } & Abertura;
   LoteDetalhe: { id: string };
-  MovimentacaoForm: Abertura | undefined;
+  /** V205: parceriaVenda = abre a Entrada por parceria preenchida com o gado da venda que ficou na fazenda */
+  MovimentacaoForm: (Abertura & { parceriaVenda?: ParceriaDaVenda }) | undefined;
   MovimentacaoDetalhe: { id: string };
   /** V163: GTA – vem preparada a partir de um movimento ou de uma venda */
   GtaForm: (Abertura & { movimentacaoId?: string; vendaId?: string }) | undefined;

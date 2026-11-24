@@ -18,6 +18,7 @@ import SeletorAnimais from '../../componentes/SeletorAnimais';
 import ValorCompraAnimais, { type ValorCompraRef } from '../../componentes/ValorCompraAnimais';
 import { AcertoParceria, CondicoesParceria, type AcertoParceriaRef, type CondicoesParceriaRef, type Parceria } from '../../componentes/ParceriaMov';
 import Interruptor from '../../componentes/Interruptor';
+import ItensParceria, { cabecasParceria, itemParceriaVazio, itensParceriaParaBanco, pesoParceria, validarItensParceria, type ItemParceria } from '../../componentes/ItensParceria';
 import { brincoRegistro, lerCriador, type Criador } from '../../lib/criadores';
 import AbasCadastro, { type Aba } from '../../componentes/AbasCadastro';
 import { useSessao } from '../../contexto/SessaoContext';
@@ -91,17 +92,24 @@ export default function MovimentacaoForm() {
   // V205: venda com "o gado fica na fazenda": já abre a Entrada por parceria com os dados da venda (um grupo por vez)
   const pv = params?.parceriaVenda;
   const grupoPv = pv?.grupos[0];
+  // V207: a Entrada por parceria tem itens (um por sexo, idade, raça, ferro, lote e peso), como a venda
+  const [itensPar, setItensPar] = useState<ItemParceria[]>([itemParceriaVazio()]);
   useEffect(() => {
     if (!pv || !grupoPv) return;
     escolherTipo('entrada_parceria');
     setData(pv.data);
     setPessoaId(pv.pessoaId);
-    setQuantidade(String(grupoPv.cab));
-    if (grupoPv.sexo) setSexo([grupoPv.sexo]);
-    setRacaId(grupoPv.racaId);
-    setFerroId(grupoPv.ferroId);
-    if (grupoPv.faixa) setNasc({ ...NASCIMENTO_FAIXA, faixa: grupoPv.faixa });
-    setPeso(grupoPv.peso > 0 ? numeroParaCampo(grupoPv.peso) : '');
+    setItensPar(
+      pv.grupos.map((g) => ({
+        ...itemParceriaVazio(),
+        quantidade: String(g.cab),
+        sexo: g.sexo,
+        faixa: g.faixa,
+        racaId: g.racaId,
+        ferroId: g.ferroId,
+        peso: g.peso > 0 ? numeroParaCampo(g.peso) : '',
+      })),
+    );
     setObs(`Gado da venda nº ${pv.venda} que ficou na fazenda (parceria).`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -131,6 +139,7 @@ export default function MovimentacaoForm() {
     setNumDestino('');
     setVerLotes(false);
     setParceria(null);
+    setItensPar([itemParceriaVazio()]);
     // V182: nascimento e morte não têm NF nem GTA
     if (t === 'nascimento' || t === 'morte') {
       setNf('');
@@ -328,13 +337,18 @@ export default function MovimentacaoForm() {
     }
     let vivo = true;
     setBuscandoParceria(true);
+    // V207: a parceria pode ter vários lotes (um por item da entrada)
     supabase
-      .from('parcerias')
-      .select('id, numero, modalidade, data_entrada, data_prevista, preco_cab_mes, cabecas_entrada, peso_entrada_kg, kg_arroba, perc_fazenda, perc_parceiro, pessoa_id, pessoa:pessoas ( nome )')
-      .eq('lote_id', origem.id)
-      .eq('situacao', 'aberta')
-      .order('data_entrada', { ascending: false })
-      .limit(1)
+      .rpc('parceria_aberta_do_lote', { p_lote: origem.id })
+      .then(async ({ data: pid }) =>
+        pid
+          ? supabase
+              .from('parcerias')
+              .select('id, numero, modalidade, data_entrada, data_prevista, preco_cab_mes, cabecas_entrada, peso_entrada_kg, kg_arroba, perc_fazenda, perc_parceiro, pessoa_id, pessoa:pessoas ( nome )')
+              .eq('id', pid as string)
+              .limit(1)
+          : { data: [] as any[] },
+      )
       .then(async ({ data: l }) => {
         const x: any = l?.[0] ?? null;
         let cab: number | undefined;
@@ -390,6 +404,7 @@ export default function MovimentacaoForm() {
   async function salvar() {
     setErro(null);
     if (!tipo || !fid) return;
+    if (tipo === 'entrada_parceria') return salvarParceriaItens();
     const e: Record<string, string> = {};
     const qtd = Number(quantidade || 0);
     const escolhendo = modo[0] === 'escolher' || tipo === 'morte';
@@ -561,12 +576,54 @@ export default function MovimentacaoForm() {
     }
     if (loteCriado) aviso += ` Lote nº ${loteCriado} cadastrado (manga e outros dados completam-se em Pecuário › Lotes).`;
     aviso += avisoDoc;
-    // V205: venda com sexos/faixas diferentes: abre a próxima parte da parceria
-    if (pv && pv.grupos.length > 1) {
-      const parte = (pv.parte ?? 1) + 1;
-      return navegacao.replace('MovimentacaoForm', { aviso: `${aviso} Agora a parte ${parte} de ${pv.partes ?? pv.grupos.length}.`, parceriaVenda: { ...pv, grupos: pv.grupos.slice(1), parte } });
-    }
     navegacao.replace('MovimentacaoForm', { aviso });
+  }
+
+  /** V207: Entrada por parceria com itens: uma parceria só, cada item no seu lote. */
+  async function salvarParceriaItens() {
+    const e: Record<string, string> = {};
+    if (!dataValida(data)) e.data = 'Data inválida.';
+    else if (baseIso > hojeBanco()) e.data = 'A data não pode ser futura.';
+    if (!pessoaId) e.pessoa = 'Informe o parceiro (dono dos animais).';
+    const cond = condParceria.current?.obter();
+    Object.assign(e, validarItensParceria(itensPar, (cond?.dados as any)?.modalidade === 'rendimento'));
+    setErros(e);
+    const lista = Object.values(e);
+    if (lista.length) return setErro(lista.length === 1 ? lista[0] : `Falta corrigir:\n• ${lista.join('\n• ')}`);
+    if (!cond || cond.erro || !cond.dados) return setErro(cond?.erro ?? 'Preencha as condições da parceria.');
+
+    const docTexto = [nf.trim() && `NF ${nf.trim()}`, gta.trim() && `GTA ${gta.trim()}`, outro.trim()].filter(Boolean).join(' · ');
+    setSalvando(true);
+    const { data: r, error } = await supabase.rpc('lancar_entrada_parceria_itens', {
+      p: {
+        mov: { fazenda: fid, data: baseIso, pessoa: pessoaId, documento: docTexto || null, obs: obs.trim() || null },
+        itens: itensParceriaParaBanco(itensPar, baseIso),
+        parceria: { ...cond.dados, venda_id: pv?.vendaId ?? '' },
+      },
+    });
+    setSalvando(false);
+    if (error) return setErro(traduzirErro(error));
+    const res = r as { ids: string[]; cabecas: number; parceria: number; titulos?: number; total?: number; itens: { cabecas: number; lote: number; lote_novo: boolean; de: number; ate: number }[] };
+
+    // documentos e fotos: em cada item (com NF ou GTA, o estoque de gado conta os animais de cada um)
+    let avisoDoc = '';
+    if (nf.trim() || gta.trim() || outro.trim() || fotoNf || fotoGta || fotoOutro) {
+      for (const id of res.ids ?? []) {
+        const { error: ed } = await supabase.rpc('movimentacao_documentos', {
+          p_mov: id,
+          p: { nf: nf.trim(), gta: gta.trim(), outro: outro.trim(), foto_nf: fotoNf ?? '', foto_gta: fotoGta ?? '', foto_outro: fotoOutro ?? '' },
+        });
+        if (ed) avisoDoc = ` ATENÇÃO: a parceria foi lançada, mas os documentos não foram gravados (${traduzirErro(ed)}).`;
+      }
+    }
+    const its = res.itens ?? [];
+    const novos = its.filter((x) => x.lote_novo).map((x) => x.lote);
+    let aviso = `Lançado: entrada por parceria de ${formatarNumero(res.cabecas)} ${res.cabecas === 1 ? 'cabeça' : 'cabeças'}`;
+    aviso += its.length > 1 ? ` em ${its.length} itens (${its.map((x) => `${formatarNumero(x.cabecas)} no lote ${codigoLote(x.lote, sigla)}`).join('; ')}).` : its[0] ? ` no lote ${codigoLote(its[0].lote, sigla)}.` : '.';
+    aviso += ` Parceria nº ${res.parceria} gravada.`;
+    if (res.titulos) aviso += ` ${res.titulos} ${res.titulos === 1 ? 'título lançado' : 'títulos mensais lançados'} no contas a receber (${formatarMoeda(Number(res.total))}).`;
+    if (novos.length) aviso += ` ${novos.length === 1 ? `Lote nº ${novos[0]} cadastrado` : `Lotes nº ${novos.join(', ')} cadastrados`} (manga e outros dados completam-se em Pecuário › Lotes).`;
+    navegacao.replace('MovimentacaoForm', { aviso: aviso + avisoDoc });
   }
 
   // ---- tela ----
@@ -587,6 +644,7 @@ export default function MovimentacaoForm() {
   const usaAnimais = saida || tipo === 'transferencia_lote';
   // V205: na parceria aberta pela venda, NF e GTA ficam na venda (o estoque de terceiros já foi lançado por ela)
   const comNfGta = tipo !== 'nascimento' && tipo !== 'morte' && !pv;
+  const comItens = tipo === 'entrada_parceria';
   // V182: escolhido o tipo, só o grupo dele fica na tela (ex.: no Nascimento e na Compra somem Saídas e Transferências)
   const grupos = tipo ? GRUPOS_MOV.filter((g) => g.tipos.some((t) => t.valor === tipo)) : GRUPOS_MOV;
 
@@ -609,7 +667,7 @@ export default function MovimentacaoForm() {
       {pv && grupoPv && tipo === 'entrada_parceria' && (
         <Aviso
           tipo="info"
-          texto={`Venda nº ${pv.venda}: o gado ficou na fazenda. Registre a parceria${(pv.partes ?? pv.grupos.length) > 1 ? ` (parte ${pv.parte ?? 1} de ${pv.partes ?? pv.grupos.length}: um lançamento para cada sexo e faixa de idade)` : ''}: confira os dados, informe o nº do lote e as condições (apascentamento ou rendimento). A NF e a GTA ficam na venda, e o estoque de terceiros do comprador já foi lançado por ela.`}
+          texto={`Venda nº ${pv.venda}: o gado ficou na fazenda. Registre a parceria: os itens vieram da venda; confira, informe o nº do lote de cada item e as condições (apascentamento ou rendimento). A NF e a GTA ficam na venda, e o estoque de terceiros do comprador já foi lançado por ela.`}
         />
       )}
       {erro && <Aviso tipo="erro" texto={erro} />}
@@ -633,7 +691,7 @@ export default function MovimentacaoForm() {
       {tipo && (
         <>
           <Secao titulo={ROTULO_MOV[tipo]} />
-          {tipo !== 'nascimento' && tipo !== 'transferencia_manga' && tipo !== 'morte' && (
+          {tipo !== 'nascimento' && tipo !== 'transferencia_manga' && tipo !== 'morte' && !comItens && (
             <>
               <View style={[estilos.linha, { alignItems: 'flex-end' }]}>
                 <View style={{ flex: 1 }}>
@@ -668,6 +726,23 @@ export default function MovimentacaoForm() {
             </>
           )}
           <CampoData rotulo={tipo === 'nascimento' ? 'Data do nascimento *' : 'Data *'} valor={data} aoMudar={setData} erro={erros.data} />
+          {/* V207: Entrada por parceria em itens (como a venda, sem preço) */}
+          {comItens && (
+            <>
+              <Secao titulo="Itens da entrada" />
+              <ItensParceria
+                itens={itensPar}
+                setItens={setItensPar}
+                fid={fid!}
+                dataIso={baseIso}
+                erros={erros}
+                aoPuxarPesagem={(x) => {
+                  if (x.data) setData(x.data);
+                  if (x.pessoaId && !pessoaId) setPessoaId(x.pessoaId);
+                }}
+              />
+            </>
+          )}
 
           {/* ----- lote de origem ----- */}
           {tipo === 'morte' && (
@@ -700,7 +775,7 @@ export default function MovimentacaoForm() {
           )}
 
           {/* ----- lote de destino (V181: digita o nº; se não existir, é cadastrado ao lançar) ----- */}
-          {(entrada || tipo === 'transferencia_lote') && (
+          {(entrada || tipo === 'transferencia_lote') && !comItens && (
             <>
               <View style={[estilos.linha, { alignItems: 'flex-end' }]}>
                 <View style={{ flex: 1 }}>
@@ -783,7 +858,7 @@ export default function MovimentacaoForm() {
           )}
 
           {/* ----- dados dos animais que entram ----- */}
-          {entrada && (
+          {entrada && !comItens && (
             <>
               {tipo === 'nascimento' && criadorFazenda && (
                 <Interruptor
@@ -826,7 +901,8 @@ export default function MovimentacaoForm() {
 
           {/* ----- negócio ----- */}
           {pessoa && <CampoPessoaBusca rotulo={pessoa.rotulo} valorId={pessoaId} aoMudar={setPessoaId} tipoNovo={pessoa.tipoNovo} />}
-          {(pessoa || tipo === 'morte') && tipo !== 'nascimento' && tipo !== 'morte' && (
+          {erros.pessoa ? <Text style={estilos.erroTexto}>{erros.pessoa}</Text> : null}
+          {(pessoa || tipo === 'morte') && tipo !== 'nascimento' && tipo !== 'morte' && !comItens && (
             <Campo
               rotulo={
                 tipo === 'entrada_parceria' ? 'Peso total de entrada (kg)' : tipo === 'saida_parceria' ? 'Peso total de saída (kg)' : 'Peso total (kg)'
@@ -883,7 +959,7 @@ export default function MovimentacaoForm() {
             style={{ minHeight: 80, paddingTop: 12, textAlignVertical: 'top' }}
           />
           {tipo === 'compra' && <ValorCompraAnimais ref={valorCompra} fazendaId={fid} cabecas={Number(quantidade || 0)} pesoBruto={lerNumero(peso) ?? 0} data={data} />}
-          {tipo === 'entrada_parceria' && <CondicoesParceria ref={condParceria} data={data} cabecas={Number(quantidade || 0)} pesoBruto={lerNumero(peso) ?? 0} />}
+          {tipo === 'entrada_parceria' && <CondicoesParceria ref={condParceria} data={data} cabecas={cabecasParceria(itensPar)} pesoBruto={pesoParceria(itensPar)} />}
           {tipo === 'saida_parceria' && origem && buscandoParceria && <Text style={estilos.nota}>Procurando a parceria do lote…</Text>}
           {tipo === 'saida_parceria' && origem && !buscandoParceria && !parceria && (
             <Text style={estilos.nota}>Este lote não tem parceria aberta lançada pela Entrada por parceria: a saída é lançada sem acerto financeiro.</Text>

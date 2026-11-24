@@ -4131,3 +4131,31 @@ Banco: já atualizado direto no Supabase (nada a rodar). O arquivo banco\V206_ba
   - com parceria registrada: mostra o nº da parceria e as cabeças.
 - A parceria fica ligada à venda (vale também para a que abre sozinha ao gravar a venda).
 - Venda não se altera: para corrigir, exclua e lance de novo (como já era).
+
+---
+
+# Fazenda Digital V207 (instale por cima da V206)
+
+Banco: já atualizado direto no Supabase (nada a rodar). O arquivo banco\V207_banco.sql vai só para guardar.
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V207.
+
+## V207 · Entrada por parceria em itens
+- Pecuário › Movimentações › Entrada por parceria agora tem itens, como a venda de gado (sem preço).
+  Cada item, em caixinhas lado a lado: Pesagem nº (Puxar) · Qtde. · Sexo · Idade · Raça · Lote nº · Ferro · Peso kg.
+- "Item igual ao anterior" copia o de cima (menos pesagem, quantidade e peso); "Item em branco" abre um novo.
+- Uma parceria só para todos os itens; cada item entra no seu lote.
+  Lote que não existe é cadastrado ao lançar, com o sexo, a raça, o ferro e a idade do item.
+- Na parceria por rendimento, cada item precisa do peso (o ganho é calculado a partir dele).
+- Vinda da venda ("o gado fica na fazenda"): os itens da venda já vêm preenchidos, numa tela só
+  (não abre mais em partes). Falta informar o lote de cada item e as condições.
+- Saída da parceria: a parceria é encontrada por qualquer um dos lotes dela; o rendimento usa o peso
+  de entrada de cada animal, em qualquer item.
+- Excluir um item da entrada (Movimentações › Consultar): a parceria continua com os outros itens
+  (cabeças, peso e apascentamento recalculados). Com saída lançada, exclua primeiro a saída.

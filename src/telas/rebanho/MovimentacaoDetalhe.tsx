@@ -66,7 +66,8 @@ export default function MovimentacaoDetalhe() {
     if (!['entrada_parceria', 'saida_parceria'].includes(mov.tipo)) return;
     const q = supabase.from('parcerias').select('*, pessoa:pessoas ( nome )');
     const { data: lp } =
-      mov.tipo === 'entrada_parceria' ? await q.eq('mov_entrada_id', mov.id).limit(1) : mov.parceria_id ? await q.eq('id', mov.parceria_id).limit(1) : { data: [] as any[] };
+      // V207: a entrada pode ter vários itens (cada um é uma movimentação da mesma parceria)
+      mov.parceria_id ? await q.eq('id', mov.parceria_id).limit(1) : mov.tipo === 'entrada_parceria' ? await q.eq('mov_entrada_id', mov.id).limit(1) : { data: [] as any[] };
     const pc: any = lp?.[0] ?? null;
     setPar(pc);
     if (!pc) return;

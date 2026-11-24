@@ -26,10 +26,13 @@ import { consulta, supabase, traduzirErro } from '../../lib/supabase';
 import { dataValida, doBanco, hojeBanco, hojeBR, paraBanco } from '../../lib/datas';
 import { formatarMoeda, formatarNumero, lerNumero, moedaParaCampo, numeroParaCampo } from '../../lib/formatos';
 import { CATEGORIAS_IMOB, calcular, textoMes, type Metodo } from '../../lib/imobilizado';
+import { carregarParametros, residualDaCategoria, vidaDaCategoria } from '../../lib/parametros';
 import { custoHoraBem } from '../../lib/maoObra';
 import { chaveNfeValida, lerXmlNfe } from '../../lib/notaFiscal';
 import { abrirFotoDocumento, fornecedorPeloDocumento } from '../../lib/documentos';
-import { somenteDigitos } from '../../lib/formatos';
+import { somenteDigitos, agruparDigitacao } from '../../lib/formatos';
+import { perguntar } from '../../lib/perguntar';
+import { COMBUSTIVEIS, MEDIDORES, PLANOS_PADRAO, TIPOS_VEICULO, USOS, unidadeMedidor, type Medidor, type TipoVeiculo } from '../../lib/frota';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -53,6 +56,30 @@ type ItemBem = {
 /** A nota lida, guardada enquanto se cadastram os bens dela (uma nota pode ter vários bens). */
 type NotaLida = { itens: ItemBem[]; extras: number; somaItens: number; total: number | null; usados: number[] };
 const TODOS = 'todos';
+/** V165: tipo da Frota sugerido pela categoria do bem */
+const TIPO_POR_CATEGORIA: Record<string, TipoVeiculo> = { tratores: 'trator', maquinas: 'colhedora', veiculos: 'caminhonete', implementos: 'implemento', equipamentos: 'equipamento' };
+/** V165: dados da ficha da Frota, quando o bem é "Controlar na Frota" */
+type DadosFrota = {
+  veicId: string | null;
+  veicNumero: number | null;
+  ativoAntes: boolean;
+  tipo: string[];
+  uso: string[];
+  medidor: string[];
+  leitura: string;
+  dataLeitura: string;
+  combustivel: string[];
+  placa: string;
+  chassi: string;
+  renavam: string;
+  marca: string;
+  modelo: string;
+  ano: string;
+};
+const frotaVazia = (): DadosFrota => ({
+  veicId: null, veicNumero: null, ativoAntes: false, tipo: [], uso: ['agricultura'], medidor: ['km'], leitura: '', dataLeitura: hojeBR(),
+  combustivel: [], placa: '', chassi: '', renavam: '', marca: '', modelo: '', ano: '',
+});
 const r2 = (v: number) => Math.round(v * 100) / 100;
 let cont = 0;
 const chave = () => `r${Date.now()}_${cont++}`;
@@ -105,6 +132,11 @@ export default function ImobilizadoForm() {
   const [notaLida, setNotaLida] = useState<NotaLida | null>(null);
   const [itemNota, setItemNota] = useState<string[]>([]);
   const [avisoNota, setAvisoNota] = useState<string | null>(null);
+  // V165: o bem controlado na Frota (abastecimento, manutenção, fretes) nasce aqui, com código e depreciação
+  const [naFrota, setNaFrota] = useState(false);
+  const [fr, setFr] = useState<DadosFrota>(frotaVazia());
+  const mudarFr = (campo: keyof DadosFrota, valor: any) => setFr((x) => ({ ...x, [campo]: valor }));
+  const medFrota = (fr.medidor[0] ?? 'km') as Medidor;
 
   const [alterarAberto, setAlterarAberto] = useState(false);
   const [alterarNum, setAlterarNum] = useState('');
@@ -128,6 +160,10 @@ export default function ImobilizadoForm() {
       .then(({ data }) => setProximo(((data?.[0]?.numero as number) ?? 0) + 1));
   }, [fid]);
   useEffect(proximoNumero, [proximoNumero]);
+  // V174: vida útil e residual usuais de cada categoria vêm dos Parâmetros
+  useEffect(() => {
+    carregarParametros();
+  }, []);
 
   // V145: código patrimonial automático = sigla da fazenda da entrada + sequência (ex.: TI 001).
   // Fica para sempre com o bem, mesmo transferido. Pode ser digitado outro.
@@ -170,7 +206,72 @@ export default function ImobilizadoForm() {
   function mudarCategoria(v: string[]) {
     setCategoria(v);
     const c = CATEGORIAS_IMOB.find((x) => x.valor === v[0]);
-    if (c && !vida.trim()) setVida(String(c.vida));
+    if (c && !vida.trim()) setVida(numeroParaCampo(vidaDaCategoria(c.valor, c.vida)));
+    if (c && !residual.trim() && residualDaCategoria(c.valor) > 0) setResidual(numeroParaCampo(residualDaCategoria(c.valor)));
+    if (naFrota && !fr.tipo[0] && TIPO_POR_CATEGORIA[v[0] ?? '']) mudarTipoFrota([TIPO_POR_CATEGORIA[v[0]]]);
+  }
+  /** O tipo da Frota sugere o medidor (km ou horas). */
+  function mudarTipoFrota(v: string[]) {
+    const t = TIPOS_VEICULO.find((x) => x.valor === v[0]);
+    setFr((x) => ({ ...x, tipo: v, medidor: t && !x.veicId ? [t.medidor] : x.medidor }));
+  }
+  async function mudarNaFrota(v: boolean) {
+    if (!v && fr.veicId && fr.ativoAntes) {
+      const ok = await perguntar('Tirar da Frota', `Este bem tem a ficha nº ${fr.veicNumero} na Frota. Ao salvar, ela fica fora de uso (o histórico de abastecimentos e manutenções continua guardado). Tirar?`, 'Tirar', 'Voltar');
+      if (!ok) return;
+    }
+    setNaFrota(v);
+    if (v && !fr.tipo[0] && TIPO_POR_CATEGORIA[categoria[0] ?? '']) mudarTipoFrota([TIPO_POR_CATEGORIA[categoria[0]]]);
+  }
+  /** Grava (ou atualiza) a ficha da Frota ligada ao bem. Na ficha nova vai o plano de manutenção sugerido para o tipo. */
+  async function gravarFrota(bemId: string, centroId: string | null): Promise<string | null> {
+    if (!naFrota) {
+      if (fr.veicId && fr.ativoAntes) {
+        const { error } = await supabase.from('frota_veiculos').update({ ativo: false }).eq('id', fr.veicId);
+        if (error) return traduzirErro(error);
+      }
+      return null;
+    }
+    const dados: any = {
+      nome: nome.trim(),
+      tipo: fr.tipo[0],
+      marca: fr.marca.trim() || null,
+      modelo: fr.modelo.trim() || null,
+      ano: fr.ano.trim() ? Number(fr.ano) : null,
+      placa: fr.placa.trim().toUpperCase() || null,
+      chassi: fr.chassi.trim().toUpperCase() || null,
+      renavam: fr.renavam.trim() || null,
+      medidor: medFrota,
+      combustivel: fr.combustivel[0] ?? null,
+      uso: fr.uso[0],
+      imobilizado_id: bemId,
+      ativo: situacao[0] !== 'baixado',
+    };
+    if (fr.veicId) {
+      const { error } = await supabase.from('frota_veiculos').update(dados).eq('id', fr.veicId);
+      return error ? traduzirErro(error) : null;
+    }
+    const faz = idUnidade(alocado) ?? fid;
+    const { data: nv, error } = await supabase
+      .from('frota_veiculos')
+      .insert({
+        ...dados,
+        fazenda_id: faz,
+        centro_custo_id: fr.uso[0] === 'particular' ? null : centroId,
+        leitura_inicial: medFrota === 'nenhum' ? 0 : n(fr.leitura),
+        data_leitura_inicial: paraBanco(medFrota === 'nenhum' ? hojeBR() : fr.dataLeitura),
+      })
+      .select('id')
+      .single();
+    if (error) return traduzirErro(error);
+    const plano = (PLANOS_PADRAO[fr.tipo[0] as TipoVeiculo] ?? []).filter((p) => medFrota !== 'nenhum' || p.meses);
+    if (plano.length) {
+      const { error: ep } = await supabase.from('frota_planos').insert(
+        plano.map((p, i) => ({ veiculo_id: (nv as any).id, fazenda_id: faz, item: p.item, intervalo: medFrota === 'nenhum' ? null : p.intervalo, intervalo_meses: p.meses, ordem: i })),
+      );
+      if (ep) return `a ficha da Frota foi criada, mas o plano de manutenção não: ${traduzirErro(ep)}`;
+    }
+    return null;
   }
 
   async function puxarCompra() {
@@ -296,11 +397,22 @@ export default function ImobilizadoForm() {
       const ano = it.ano_fabricacao || it.ano_modelo ? `ano ${[it.ano_fabricacao, it.ano_modelo].filter(Boolean).join('/')}` : null;
       const det = [marcaModelo || null, ano, it.numero_serie ? `série ${it.numero_serie}` : null, it.chassi ? `chassi ${it.chassi}` : null, it.placa ? `placa ${it.placa}` : null, it.renavam ? `renavam ${it.renavam}` : null].filter(Boolean);
       setDescricao(det.length ? det.join(' · ') : it.descricao);
+      // V165: o que a nota traz do veículo já vai para a ficha da Frota
+      setFr((x) => ({
+        ...x,
+        marca: it.marca ?? x.marca,
+        modelo: it.modelo ?? x.modelo,
+        ano: (it.ano_modelo || it.ano_fabricacao || x.ano || '').replace(/\D/g, '').slice(0, 4),
+        placa: it.placa ?? x.placa,
+        chassi: it.chassi ?? it.numero_serie ?? x.chassi,
+        renavam: it.renavam ?? x.renavam,
+      }));
     }
     const c = CATEGORIAS_IMOB.find((x) => x.valor === cat && x.metodo === 'depreciacao');
     setMetodo('depreciacao');
     setCategoria(c ? [c.valor] : []);
-    if (c) setVida(String(c.vida));
+    if (c) setVida(numeroParaCampo(vidaDaCategoria(c.valor, c.vida)));
+    if (c && residualDaCategoria(c.valor) > 0) setResidual((r) => (r.trim() ? r : numeroParaCampo(residualDaCategoria(c.valor))));
   }
 
   async function abrir(iid: string) {
@@ -337,6 +449,18 @@ export default function ImobilizadoForm() {
       setValorAnterior(b.situacao === 'formacao' && Number(b.formacao_valor_anterior) ? moedaParaCampo(b.formacao_valor_anterior) : '');
       if (b.situacao === 'formacao') setValor('');
       setBemCarregado(b);
+      // V165: ficha da Frota ligada ao bem
+      const v = ((await supabase.from('frota_veiculos').select('*').eq('imobilizado_id', b.id).limit(1)).data as any[] | null)?.[0];
+      setNaFrota(!!v && v.ativo !== false);
+      setFr(
+        v
+          ? {
+              veicId: v.id, veicNumero: v.numero, ativoAntes: v.ativo !== false, tipo: [v.tipo], uso: [v.uso], medidor: [v.medidor],
+              leitura: numeroParaCampo(v.leitura_inicial), dataLeitura: doBanco(v.data_leitura_inicial), combustivel: v.combustivel ? [v.combustivel] : [],
+              placa: v.placa ?? '', chassi: v.chassi ?? '', renavam: v.renavam ?? '', marca: v.marca ?? '', modelo: v.modelo ?? '', ano: v.ano ? String(v.ano) : '',
+            }
+          : frotaVazia(),
+      );
       setCriarTalhao(false);
       setNotaLida(null);
       setItemNota([]);
@@ -402,6 +526,8 @@ export default function ImobilizadoForm() {
     setCriarTalhao(false);
     setTalhaoNome('');
     setTalhaoHa('');
+    setNaFrota(false);
+    setFr(frotaVazia());
     setErros({});
   }
 
@@ -438,6 +564,16 @@ export default function ImobilizadoForm() {
       if (outro) e.codigo = `O código ${codigo.trim().toUpperCase()} já é do bem nº ${outro.numero}.`;
     }
     if (!id && notaLida && notaLida.itens.length > 1 && !itemNota[0]) e.itemNota = 'Escolha qual item da nota é este bem.';
+    if (naFrota && !formacao) {
+      if (!fr.tipo[0]) e.frotaTipo = 'Frota: escolha o tipo.';
+      if (!fr.uso[0]) e.frotaUso = 'Frota: escolha o uso.';
+      if (fr.ano.trim() && (!/^\d{4}$/.test(fr.ano.trim()) || Number(fr.ano) < 1950 || Number(fr.ano) > 2100)) e.frotaAno = 'Frota: ano com 4 números.';
+      if (!fr.veicId && medFrota !== 'nenhum') {
+        if (n(fr.leitura) == null || n(fr.leitura)! < 0) e.frotaLeitura = `Frota: informe o ${medFrota === 'horas' ? 'horímetro (horas)' : 'hodômetro (km)'} de hoje.`;
+        if (!dataValida(fr.dataLeitura)) e.frotaData = 'Frota: informe a data dessa leitura.';
+      }
+      if (!fr.veicId && !idUnidade(alocado) && !fid) e.frotaTipo = 'Frota: escolha a fazenda onde o bem fica.';
+    }
     setErros(e);
     const lista = Object.values(e);
     if (lista.length) return setErro(lista.length === 1 ? lista[0] : `Falta corrigir:\n• ${lista.join('\n• ')}`);
@@ -499,6 +635,16 @@ export default function ImobilizadoForm() {
         return setErro(`O bem foi gravado, mas o custo por hora não: ${traduzirErro(e2)}`);
       }
     }
+    // V165: a ficha da Frota anda junto com o bem
+    let avisoFrota = '';
+    if (!error && (r as any)?.id && !formacao && (naFrota || fr.veicId)) {
+      const ef = await gravarFrota((r as any).id, rateio[0]?.centroId ?? null);
+      if (ef) {
+        setSalvando(false);
+        return setErro(`O bem foi gravado, mas a Frota não: ${ef}`);
+      }
+      if (naFrota && !fr.veicId) avisoFrota = ' Já está na Frota, com o plano de manutenção sugerido.';
+    }
     setSalvando(false);
     if (error) return setErro(traduzirErro(error));
     // nota com vários bens: mantém a nota para cadastrar o próximo item
@@ -517,7 +663,7 @@ export default function ImobilizadoForm() {
       proximoNumero();
       return;
     }
-    setAviso(`Bem nº ${(r as any).numero} (${nome.trim()}) ${id ? 'alterado' : 'cadastrado'}.${faltam > 0 ? ` A nota ainda tem ${faltam} ${faltam === 1 ? 'item' : 'itens'}: escolha o próximo abaixo.` : ''}`);
+    setAviso(`Bem nº ${(r as any).numero}${(r as any).codigo ? ` (${(r as any).codigo})` : ''} – ${nome.trim()} ${id ? 'alterado' : 'cadastrado'}.${avisoFrota}${faltam > 0 ? ` A nota ainda tem ${faltam} ${faltam === 1 ? 'item' : 'itens'}: escolha o próximo abaixo.` : ''}`);
     if (nota && faltam > 0) {
       limpar(true);
       setNotaLida(nota);
@@ -654,6 +800,72 @@ export default function ImobilizadoForm() {
           <Botao titulo="Puxar" tipo="secundario" onPress={puxarCompra} />
         </View>
       </View>
+
+      {!formacao && (
+        <Interruptor
+          rotulo="Controlar na Frota?"
+          descricao={
+            fr.veicId
+              ? `Ficha nº ${fr.veicNumero} da Frota${fr.ativoAntes ? '' : ' (fora de uso)'}: abastecimentos, manutenções e fretes ficam lá; o código e a depreciação ficam aqui.`
+              : 'Veículos, tratores, máquinas e equipamentos com abastecimento, manutenção ou frete. O bem vai para a Frota com o mesmo código.'
+          }
+          valor={naFrota}
+          aoMudar={mudarNaFrota}
+        />
+      )}
+      {naFrota && !formacao && (
+        <View style={estilos.caixaFrota}>
+          <Escolha rotulo="Tipo na Frota *" opcoes={TIPOS_VEICULO.map((t) => ({ valor: t.valor, rotulo: t.rotulo }))} valor={fr.tipo} aoMudar={mudarTipoFrota} erro={erros.frotaTipo} />
+          <Escolha rotulo="Uso (para onde vai o custo) *" opcoes={USOS.map((u) => ({ valor: u.valor, rotulo: u.rotulo }))} valor={fr.uso} aoMudar={(v) => mudarFr('uso', v)} erro={erros.frotaUso} />
+          <View style={estilos.linha}>
+            <View style={{ flex: 1 }}>
+              <Campo rotulo="Placa" value={fr.placa} onChangeText={(t) => mudarFr('placa', t.toUpperCase())} autoCapitalize="characters" placeholder="ABC1D23" />
+            </View>
+            <View style={{ width: 100 }}>
+              <Campo rotulo="Ano" value={fr.ano} onChangeText={(t) => mudarFr('ano', t.replace(/\D/g, '').slice(0, 4))} keyboardType="number-pad" erro={erros.frotaAno} />
+            </View>
+          </View>
+          <View style={estilos.linha}>
+            <View style={{ flex: 1 }}>
+              <Campo rotulo="Marca" value={fr.marca} onChangeText={(t) => mudarFr('marca', t)} autoCapitalize="words" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Campo rotulo="Modelo" value={fr.modelo} onChangeText={(t) => mudarFr('modelo', t)} autoCapitalize="characters" />
+            </View>
+          </View>
+          <View style={estilos.linha}>
+            <View style={{ flex: 1.3 }}>
+              <Campo rotulo="Chassi / nº de série" value={fr.chassi} onChangeText={(t) => mudarFr('chassi', t)} autoCapitalize="characters" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Campo rotulo="RENAVAM" value={fr.renavam} onChangeText={(t) => mudarFr('renavam', t.replace(/\D/g, ''))} keyboardType="number-pad" />
+            </View>
+          </View>
+          <Escolha rotulo="Medidor" opcoes={MEDIDORES} valor={fr.medidor} aoMudar={(v) => mudarFr('medidor', v)} />
+          {medFrota !== 'nenhum' && !fr.veicId && (
+            <View style={estilos.linha}>
+              <View style={{ flex: 1.2 }}>
+                <Campo
+                  rotulo={`${medFrota === 'horas' ? 'Horímetro' : 'Hodômetro'} hoje (${unidadeMedidor(medFrota)}) *`}
+                  value={fr.leitura}
+                  onChangeText={(t) => mudarFr('leitura', agruparDigitacao(t))}
+                  keyboardType="decimal-pad"
+                  erro={erros.frotaLeitura}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <CampoData rotulo="Na data *" valor={fr.dataLeitura} aoMudar={(t) => mudarFr('dataLeitura', t)} erro={erros.frotaData} />
+              </View>
+            </View>
+          )}
+          <Escolha rotulo="Combustível" opcoes={COMBUSTIVEIS} valor={fr.combustivel} aoMudar={(v) => mudarFr('combustivel', fr.combustivel[0] === v[0] ? [] : v)} />
+          <Text style={estilos.nota}>
+            {fr.veicId
+              ? 'Plano de manutenção, responsável, seguro e tanque se ajustam na própria Frota › Veículos.'
+              : 'Ao cadastrar, a Frota recebe o bem com o plano de manutenção sugerido para o tipo. Responsável, seguro e tanque se completam depois na Frota.'}
+          </Text>
+        </View>
+      )}
 
       {id ? (
         <Text style={estilos.nota}>Alocado em: {nomeUnidade(idUnidade(alocado), fazendas)}. Para levar a outra fazenda, use "Transferir para outra fazenda", mais abaixo.</Text>
@@ -943,6 +1155,7 @@ const estilos = StyleSheet.create({
   erro: { fontSize: tam.pequeno, color: cores.erro },
   nota: { fontSize: tam.pequeno, color: cores.textoSuave },
   soma: { fontSize: tam.pequeno + 1, fontWeight: '700', color: cores.textoSuave },
+  caixaFrota: { backgroundColor: cores.infoFundo, borderRadius: tam.raio, padding: 12, gap: 10 },
   calc: { backgroundColor: cores.cartao, borderRadius: tam.raio, borderWidth: 1, borderColor: cores.borda, padding: 12, gap: 6 },
   calcRotulo: { flex: 1, fontSize: tam.pequeno + 1, color: cores.textoSuave },
   calcValor: { fontSize: tam.pequeno + 1, fontWeight: '800', color: cores.texto },

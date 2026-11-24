@@ -17,6 +17,7 @@ import Secao from '../../componentes/Secao';
 import SeletorLista, { type ItemLista } from '../../componentes/SeletorLista';
 import CampoPessoaBusca from '../../componentes/CampoPessoaBusca';
 import EntradaDocumento from '../../componentes/EntradaDocumento';
+import ParcelasIntermediarias, { CampoQtdeIntermediarias, ajustarIntermediarias, erroIntermediarias, gerarSerie, juntarParcelas, somaLinhas, type LinhaParcela } from '../../componentes/ParcelasIntermediarias';
 import PagarTitulos from './PagarTitulos';
 import ConsultaTitulos from './ConsultaTitulos';
 import { useSessao } from '../../contexto/SessaoContext';
@@ -27,8 +28,8 @@ import { formatarMoeda, formatarNumero, lerNumero, moedaParaCampo, numeroParaCam
 import { chaveNfeValida, codigoBarras, type LeituraNota } from '../../lib/notaFiscal';
 import { abrirFotoDocumento, fornecedorPeloDocumento } from '../../lib/documentos';
 import { perguntar } from '../../lib/perguntar';
-import { listaTiposTitulo } from '../../lib/classificacao';
-import { somarDias } from '../../lib/reproducao';
+import { listaTiposTitulo, tiposLancamento } from '../../lib/classificacao';
+import { aprenderRateio, linhasDoPadrao, mesmoRateio, rateioPadrao, type ItemRateio } from '../../lib/rateioPadrao';
 import { r2, textoCompetencia, textosTitulo, type TipoTitulo } from '../../lib/titulos';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
@@ -67,9 +68,21 @@ export default function TituloForm() {
   const [primeiro, setPrimeiro] = useState('');
   const [intervalo, setIntervalo] = useState('30');
   const [parcelas, setParcelas] = useState<Parcela[]>([]);
+  const [nInterm, setNInterm] = useState('0');
+  const [interm, setInterm] = useState<LinhaParcela[]>([]);
+  const [fixo, setFixo] = useState('');
   const [fim, setFim] = useState('');
   const [contaId, setContaId] = useState<string | null>(null);
   const [rateio, setRateio] = useState<Rateio[]>([]);
+  // V174: rateio que veio do padrão guardado da unidade (some se a pessoa mexer)
+  const [rateioAuto, setRateioAuto] = useState(false);
+  const [padrao, setPadrao] = useState<{ origem: 'tipo' | 'geral' | null; rateio: ItemRateio[] }>({ origem: null, rateio: [] });
+  const [guardarPadrao, setGuardarPadrao] = useState<string[]>([]);
+  const [tipoDesp, setTipoDesp] = useState<{ chave: string | null; despesa: boolean }>({ chave: null, despesa: false });
+  const mexerRateio = (f: (l: Rateio[]) => Rateio[]) => {
+    setRateioAuto(false);
+    setRateio(f);
+  };
   const [bancoId, setBancoId] = useState<string | null>(null);
   const [linha, setLinha] = useState('');
   const [pix, setPix] = useState('');
@@ -97,7 +110,9 @@ export default function TituloForm() {
   const travado = !!tit && (!!tit.compra_id || !!tit.venda_id || !!tit.financiamento_id || daColheita || Number(tit.valor_pago) > 0);
   const total = n(valor) ?? 0;
   const somaRateio = rateio.reduce((s, x) => s + (n(x.perc) ?? 0), 0);
-  const somaParcelas = parcelas.reduce((s, x) => s + (n(x.valor) ?? 0), 0);
+  const somaInterm = somaLinhas(interm);
+  const somaParcelas = r2(parcelas.reduce((s, x) => s + (n(x.valor) ?? 0), 0) + somaInterm);
+  const valorFixo = interm.length ? n(fixo) ?? 0 : 0;
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: id ? `Título nº ${tit.numero}` : tx.modulo });
@@ -117,23 +132,67 @@ export default function TituloForm() {
   // ---- parcelas: geradas pelo valor, nº, 1º vencimento e intervalo ----
   const manterParcelas = useRef(false); // vencimentos lidos do documento: ficam até a pessoa mexer
   useEffect(() => {
+    setInterm((l) => ajustarIntermediarias(l, nInterm));
+  }, [nInterm]);
+  useEffect(() => {
     if (id || continua) return;
     if (manterParcelas.current) {
       manterParcelas.current = false;
       return;
     }
-    const q = Math.max(1, Math.min(60, Number(nParc) || 1));
+    const q = Math.max(1, Math.min(120, Number(nParc) || 1));
     const base = paraBanco(primeiro);
-    if (!base || total <= 0) return setParcelas([]);
-    const cada = Math.floor((total / q) * 100) / 100;
-    const ultima = r2(total - cada * (q - 1));
-    setParcelas(Array.from({ length: q }, (_, i) => ({ chave: chave(), venc: doBanco(somarDias(base, i * (Number(intervalo) || 30))), valor: moedaParaCampo(i === q - 1 ? ultima : cada) })));
+    // V170: as normais dividem o que sobra depois das intermediárias (ou têm o valor fixo informado)
+    const restante = r2(total - somaInterm);
+    if (!base || (restante <= 0 && valorFixo <= 0)) return setParcelas([]);
+    setParcelas(gerarSerie(q, base, Number(intervalo) || 30, restante, valorFixo));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nParc, primeiro, intervalo, total, id, continua]);
+  }, [nParc, primeiro, intervalo, total, id, continua, somaInterm, valorFixo]);
+  // V170: com o valor fixo de cada parcela, o valor do título é a soma de tudo
+  useEffect(() => {
+    if (id || continua || valorFixo <= 0) return;
+    const q = Math.max(1, Math.min(120, Number(nParc) || 1));
+    setValor(moedaParaCampo(r2(somaInterm + valorFixo * q)));
+  }, [id, continua, valorFixo, nParc, somaInterm]);
 
   // ---- listas ----
   // O que é este título, em linguagem do dia a dia: a conta do plano vem dos bastidores (lib/classificacao).
   // Título antigo com uma conta fora da lista continua aparecendo, com o nome da conta.
+  // V174: o tipo escolhido (a conta do plano) diz se é despesa; a despesa da fazenda vai a um centro de custo
+  useEffect(() => {
+    if (!contaId) return setTipoDesp({ chave: null, despesa: false });
+    let vivo = true;
+    tiposLancamento()
+      .then((l) => {
+        const t = l.find((x) => x.conta_id === contaId);
+        if (vivo) setTipoDesp({ chave: t?.chave ?? null, despesa: t?.uso === 'despesa' });
+      })
+      .catch(() => undefined);
+    return () => {
+      vivo = false;
+    };
+  }, [contaId]);
+  useEffect(() => {
+    if (tipo !== 'pagar' || id || carregando || particular) return;
+    if (rateio.length && !rateioAuto) return;
+    let vivo = true;
+    rateioPadrao(idUnidade(unidade), tipoDesp.chave).then((r) => {
+      if (!vivo) return;
+      setPadrao(r);
+      if (r.rateio.length) {
+        setRateio(linhasDoPadrao(r.rateio, chave));
+        setRateioAuto(true);
+      } else if (rateioAuto) {
+        setRateio([]);
+        setRateioAuto(false);
+      }
+    });
+    return () => {
+      vivo = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unidade, tipoDesp.chave, id, carregando, particular, tipo]);
+
   const carregarContas = useCallback(async (): Promise<ItemLista[]> => {
     const lista = await listaTiposTitulo(tipo);
     if (contaId && !lista.some((x) => x.id === contaId)) {
@@ -233,12 +292,32 @@ export default function TituloForm() {
     setAviso(null);
     setCarregando(true);
     try {
-      const t = await consulta<any>(
-        supabase.from('lancamentos').select('*, rateio:lancamento_rateios ( centro_custo_id, percentual ), compra:compras ( numero ), venda:vendas ( numero )').eq('tipo', tipo).eq('numero', num).maybeSingle(),
-      );
+      const ler = () =>
+        consulta<any>(
+          supabase.from('lancamentos').select('*, rateio:lancamento_rateios ( centro_custo_id, percentual ), compra:compras ( numero ), venda:vendas ( numero )').eq('tipo', tipo).eq('numero', num).maybeSingle(),
+        );
+      let t = await ler();
       if (!t) {
         setCarregando(false);
         return setAlterarErro(`Não há título nº ${num}.`);
+      }
+      // V171 (implantação): título avulso já pago, ou pago em parte, também se altera — estorna e abre em aberto
+      const avulsoT = !t.compra_id && !t.venda_id && !t.financiamento_id && !t.frete_id && !t.colheita_id && !t.fech_colheita_id && !t.vale_colheita_id && !t.cafe_secagem_id && !t.cafe_pilagem_id && !t.cafe_movimento_id && !t.cafe_contrato_id;
+      if (avulsoT && Number(t.valor_pago) > 0) {
+        const ok = await perguntar(
+          `Título com ${tx.pagamento}`,
+          `O título nº ${num} já tem ${formatarMoeda(Number(t.valor_pago))} ${tx.pago}. Para alterar tudo (valor, ${tx.receber ? 'cliente' : 'fornecedor'}, classificação), o sistema estorna o ${tx.pagamento} (o valor volta para o caixa/banco) e depois você dá a baixa de novo. Só o Produtor e o Administrador podem.${t.situacao === 'pago' ? '' : '\n\nEm "Voltar", o título abre só para mudar vencimento, boleto e encargos.'}`,
+          'Estornar e alterar',
+          'Voltar',
+        );
+        if (ok) {
+          const { error: eEst } = await supabase.rpc('estornar_pagamentos', { p_campo: 'id', p_id: t.id });
+          if (eEst) {
+            setCarregando(false);
+            return setAlterarErro(traduzirErro(eEst));
+          }
+          t = await ler();
+        }
       }
       if (t.situacao === 'pago') {
         setCarregando(false);
@@ -298,9 +377,14 @@ export default function TituloForm() {
     setPrimeiro('');
     setIntervalo('30');
     setParcelas([]);
+    setNInterm('0');
+    setInterm([]);
+    setFixo('');
     setFim('');
     setContaId(null);
     setRateio([]);
+    setRateioAuto(false);
+    setGuardarPadrao([]);
     setBancoId(null);
     setLinha('');
     setPix('');
@@ -322,13 +406,20 @@ export default function TituloForm() {
     if (!dataValida(emissao)) e.emissao = 'Informe a data de emissão.';
     if (total <= 0) e.valor = 'Informe o valor.';
     if (!dataValida(primeiro)) e.venc = id ? 'Informe o vencimento.' : continua ? 'Informe o primeiro vencimento.' : 'Informe o vencimento (o primeiro, se for parcelado).';
+    else if (dataValida(emissao) && paraBanco(primeiro)! < paraBanco(emissao)!) e.venc = `O vencimento ${primeiro} é antes da emissão (${emissao}). Confira o dia e o ano.`;
+    if (!id && !continua && dataValida(emissao) && parcelas.some((p) => dataValida(p.venc) && paraBanco(p.venc)! < paraBanco(emissao)!))
+      e.parcelas = `Há vencimento antes da emissão (${emissao}). Confira o dia e o ano.`;
     if (!id && !continua && !e.venc && !e.valor) {
-      if (!parcelas.length || parcelas.some((p) => !dataValida(p.venc) || (n(p.valor) ?? 0) <= 0)) e.parcelas = 'Confira o vencimento e o valor de cada parcela.';
+      const eInt = erroIntermediarias(interm);
+      if (eInt) e.parcelas = eInt;
+      else if (!parcelas.length || parcelas.some((p) => !dataValida(p.venc) || (n(p.valor) ?? 0) <= 0)) e.parcelas = 'Confira o vencimento e o valor de cada parcela.';
       else if (Math.abs(somaParcelas - total) > 0.009) e.parcelas = `As parcelas somam ${formatarMoeda(somaParcelas)} e o valor é ${formatarMoeda(total)}.`;
     }
     if (continua && fim && !dataValida(fim)) e.fim = 'Data inválida.';
     else if (continua && fim && paraBanco(fim)! < paraBanco(primeiro)!) e.fim = 'O último mês não pode ser antes do primeiro vencimento.';
     if (!travado && particular && !rateio.length) e.rateio = 'Diga de qual sócio é (toque em "+ De qual sócio").';
+    if (!id && tipo === 'pagar' && !particular && unidade !== ADM && tipoDesp.despesa && !rateio.length)
+      e.rateio = 'Diga em qual centro de custo vai esta despesa (toque em "+ Centro de custo"). Se for de vários, divida em %: na primeira vez o rateio fica guardado como padrão.';
     if (!travado && rateio.length) {
       if (rateio.some((x) => !x.centroId)) e.rateio = particular ? 'Escolha o sócio de cada linha.' : 'Escolha o centro de custo de cada linha do rateio.';
       else if (new Set(rateio.map((x) => x.centroId)).size !== rateio.length) e.rateio = 'Há centro de custo repetido no rateio.';
@@ -371,22 +462,23 @@ export default function TituloForm() {
       p.continua = true;
       p.fim = fim ? paraBanco(fim) : '';
     } else if (!id) {
-      p.parcelas = parcelas.map((x) => ({ vencimento: paraBanco(x.venc), valor: n(x.valor) }));
+      p.parcelas = juntarParcelas(parcelas, interm);
     }
     setSalvando(true);
     const { data: r, error } = await supabase.rpc('salvar_titulo', { p });
     setSalvando(false);
     if (error) return setErro(traduzirErro(error));
     const res = r as { ids: string[]; numero: number };
+    const aprendeu = !id && tipo === 'pagar' && !particular && tipoDesp.despesa ? await aprenderRateio(idUnidade(unidade), tipoDesp.chave, p.rateio as unknown as ItemRateio[], guardarPadrao.length > 0) : null;
     if (id && params?.numero && voltarDaConsulta(navegacao, String(params.numero), false)) return;
     setAviso(
-      id
+      (id
         ? `Título nº ${res.numero} alterado.`
         : continua
           ? `Conta contínua gravada: título nº ${res.numero} e os dos meses seguintes (até o mês que vem) já estão no ${tx.modulo.toLowerCase()}. Todo mês entra o próximo, com o valor previsto.`
-          : parcelas.length > 1
-            ? `${parcelas.length} parcelas gravadas, a partir do título nº ${res.numero}: ${formatarMoeda(total)}.`
-            : `Título nº ${res.numero} gravado: ${formatarMoeda(total)}, vence ${primeiro}.`,
+          : parcelas.length + interm.length > 1
+            ? `${interm.length ? `${interm.length} intermediária${interm.length > 1 ? 's' : ''} e ${parcelas.length} parcela${parcelas.length > 1 ? 's' : ''}` : `${parcelas.length} parcelas`} gravadas, a partir do título nº ${res.numero}: ${formatarMoeda(total)}.`
+            : `Título nº ${res.numero} gravado: ${formatarMoeda(total)}, vence ${primeiro}.`) + (aprendeu ? ` ${aprendeu}` : ''),
     );
     limpar();
     recarregarTopo();
@@ -531,7 +623,10 @@ export default function TituloForm() {
             opcoes={opcoesUnidade(fazendas)}
             valor={[unidade]}
             aoMudar={(v) => {
-              if (v[0] !== unidade) setRateio([]);
+              if (v[0] !== unidade) {
+                setRateio([]);
+                setRateioAuto(false);
+              }
               setUnidade(v[0]);
             }}
           />
@@ -570,31 +665,17 @@ export default function TituloForm() {
         <>
           <View style={estilos.linha}>
             <View style={{ width: 86 }}>
-              <Campo rotulo="Parcelas" value={nParc} onChangeText={(t) => setNParc(t.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" />
+              <Campo rotulo="Parcelas" value={nParc} onChangeText={(t) => setNParc(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
             </View>
-            <View style={{ flex: 1 }}>
-              <CampoData rotulo={Number(nParc) > 1 ? '1º vencimento *' : 'Vencimento *'} valor={primeiro} aoMudar={setPrimeiro} erro={erros.venc} />
-            </View>
+            <CampoQtdeIntermediarias valor={nInterm} aoMudar={setNInterm} />
             {Number(nParc) > 1 && (
               <View style={{ width: 96 }}>
                 <Campo rotulo="A cada (dias)" value={intervalo} onChangeText={(t) => setIntervalo(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
               </View>
             )}
           </View>
-          {parcelas.length > 1 &&
-            parcelas.map((x, k) => (
-              <View key={x.chave} style={estilos.linha}>
-                <Text style={estilos.parcNum}>{k + 1}ª</Text>
-                <View style={{ flex: 1 }}>
-                  <CampoData rotulo="Vencimento" valor={x.venc} aoMudar={(t) => setParcelas((l) => l.map((y) => (y.chave === x.chave ? { ...y, venc: t } : y)))} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <CampoMoeda rotulo="Valor" valor={x.valor} aoMudar={(t) => setParcelas((l) => l.map((y) => (y.chave === x.chave ? { ...y, valor: t } : y)))} />
-                </View>
-              </View>
-            ))}
-          {parcelas.length > 1 && <Text style={[estilos.soma, Math.abs(somaParcelas - total) > 0.009 && { color: cores.erro }]}>Parcelas somam {formatarMoeda(somaParcelas)}</Text>}
-          {erros.parcelas && <Text style={estilos.erro}>{erros.parcelas}</Text>}
+          <CampoData rotulo={Number(nParc) > 1 || interm.length ? '1º vencimento das parcelas *' : 'Vencimento *'} valor={primeiro} aoMudar={setPrimeiro} erro={erros.venc} />
+          <ParcelasIntermediarias normais={parcelas} setNormais={setParcelas} interm={interm} setInterm={setInterm} fixo={fixo} setFixo={setFixo} total={total} rotuloTotal="o valor" erro={erros.parcelas} />
         </>
       )}
 
@@ -605,26 +686,31 @@ export default function TituloForm() {
           <SeletorLista rotulo={tx.receber ? 'O que é esta receita' : 'O que é esta conta'} valorId={contaId} aoMudar={setContaId} carregar={carregarContas} permitirLimpar dicaBusca={tx.receber ? 'Ex.: arrendamento, leite' : 'Ex.: energia, seguro, financiamento'} vazio="Nenhum tipo cadastrado." />
           <Text style={estilos.subtitulo}>{particular ? 'De qual sócio é' : 'Rateio por centro de custo'}</Text>
           {particular && <Text style={estilos.nota}>Particular dos sócios: não entra no resultado das fazendas; vai ao Patrimônio Líquido{tx.receber ? ' como receita do sócio' : ' como despesa do sócio'}.</Text>}
+          {rateioAuto && padrao.origem && <Text style={estilos.nota}>Rateio padrão {padrao.origem === 'tipo' ? 'deste tipo de despesa' : 'geral'} da unidade (Financeiro › Parâmetros). Mude se este for diferente.</Text>}
           {rateio.map((x) => (
             <View key={x.chave} style={estilos.linha}>
               <View style={{ flex: 1 }}>
-                <SeletorLista rotulo={particular ? 'Sócio' : 'Centro de custo'} valorId={x.centroId} aoMudar={(v) => setRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, centroId: v } : y)))} carregar={carregarCentros} vazio={particular ? 'Nenhum sócio cadastrado neste Particular. Cadastre em Mais › Fazendas › Consultar › toque no Particular.' : 'Nenhum centro de custo. Cadastre em Financeiro › Centros de custo.'} />
+                <SeletorLista rotulo={particular ? 'Sócio' : 'Centro de custo'} valorId={x.centroId} aoMudar={(v) => mexerRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, centroId: v } : y)))} carregar={carregarCentros} vazio={particular ? 'Nenhum sócio cadastrado neste Particular. Cadastre em Mais › Fazendas › Consultar › toque no Particular.' : 'Nenhum centro de custo. Cadastre em Financeiro › Centros de custo.'} />
               </View>
               <View style={{ width: 80 }}>
-                <Campo rotulo="%" value={x.perc} onChangeText={(t) => setRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, perc: t } : y)))} keyboardType="decimal-pad" />
+                <Campo rotulo="%" value={x.perc} onChangeText={(t) => mexerRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, perc: t } : y)))} keyboardType="decimal-pad" />
               </View>
-              <Pressable onPress={() => setRateio((l) => l.filter((y) => y.chave !== x.chave))} hitSlop={8} style={{ paddingTop: 26 }} accessibilityLabel="Tirar centro">
+              <Pressable onPress={() => mexerRateio((l) => l.filter((y) => y.chave !== x.chave))} hitSlop={8} style={{ paddingTop: 26 }} accessibilityLabel="Tirar centro">
                 <Ionicons name="close-circle" size={24} color={cores.textoSuave} />
               </Pressable>
             </View>
           ))}
           <View style={estilos.linhaEntre}>
-            <Text style={estilos.link} onPress={() => setRateio((l) => [...l, { chave: chave(), centroId: null, perc: numeroParaCampo(r2(Math.max(0, 100 - somaRateio))) }])}>
+            <Text style={estilos.link} onPress={() => mexerRateio((l) => [...l, { chave: chave(), centroId: null, perc: numeroParaCampo(r2(Math.max(0, 100 - somaRateio))) }])}>
               + {particular ? (rateio.length ? 'Dividir com outro sócio' : 'De qual sócio') : 'Centro de custo'}
             </Text>
             {rateio.length > 0 && <Text style={[estilos.soma, Math.abs(somaRateio - 100) > 0.001 && { color: cores.erro }]}>Soma {formatarNumero(somaRateio, 2)}%</Text>}
           </View>
           {erros.rateio && <Text style={estilos.erro}>{erros.rateio}</Text>}
+          {!id && tipo === 'pagar' && !particular && !rateioAuto && tipoDesp.chave && padrao.origem === 'tipo' && rateio.length > 0 && rateio.every((x) => x.centroId) &&
+            !mesmoRateio(padrao.rateio, rateio.map((x) => ({ centro_custo_id: x.centroId!, percentual: n(x.perc) ?? 0 }))) && (
+              <Escolha opcoes={[{ valor: 'sim', rotulo: 'Guardar este rateio como o novo padrão deste tipo de despesa' }]} valor={guardarPadrao} aoMudar={setGuardarPadrao} multiplo />
+            )}
         </>
       )}
 

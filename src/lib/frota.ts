@@ -201,14 +201,24 @@ export type Veiculo = {
   proprietario: string | null;
   imobilizado_id: string | null;
   ativo: boolean;
+  bem?: { codigo_patrimonial: string | null } | { codigo_patrimonial: string | null }[] | null;
 };
 
-const CAMPOS_VEICULO = 'id, fazenda_id, numero, nome, tipo, marca, modelo, ano, placa, medidor, combustivel, tanque_litros, uso, centro_custo_id, proprietario, imobilizado_id, ativo';
+const CAMPOS_VEICULO = 'id, fazenda_id, numero, nome, tipo, marca, modelo, ano, placa, medidor, combustivel, tanque_litros, uso, centro_custo_id, proprietario, imobilizado_id, ativo, bem:imobilizados ( codigo_patrimonial )';
+
+/** V165: o código patrimonial do bem (ex.: FI 003), que acompanha o veículo na Frota. */
+export function codigoBem(v: { bem?: any }): string | null {
+  const b = Array.isArray(v?.bem) ? v.bem[0] : v?.bem;
+  return b?.codigo_patrimonial ?? null;
+}
 
 /** Veículos em uso (de todas as fazendas que o usuário vê): os da fazenda ativa primeiro. */
 export async function carregarVeiculos(fazendaAtivaId?: string | null, incluirInativos = false): Promise<Veiculo[]> {
-  let q = supabase.from('frota_veiculos').select(CAMPOS_VEICULO).order('nome');
+  // V165: na Frota só os bens do Imobilizado marcados "Controlar na Frota"
+  let q = supabase.from('frota_veiculos').select(CAMPOS_VEICULO).not('imobilizado_id', 'is', null).order('nome');
   if (!incluirInativos) q = q.eq('ativo', true);
+  // V169: o que é de uma fazenda só aparece nela
+  if (fazendaAtivaId) q = q.eq('fazenda_id', fazendaAtivaId);
   const d = await consulta<Veiculo[]>(q);
   return [...d].sort((a, b) => Number(b.fazenda_id === fazendaAtivaId) - Number(a.fazenda_id === fazendaAtivaId));
 }
@@ -216,7 +226,7 @@ export async function carregarVeiculos(fazendaAtivaId?: string | null, incluirIn
 export function itemVeiculo(v: Veiculo, leitura?: LeituraAtual | null): ItemLista {
   const partes = [ROTULO_TIPO_VEICULO[v.tipo] ?? v.tipo, v.placa, ROTULO_USO[v.uso]];
   if (leitura?.leitura != null && v.medidor !== 'nenhum') partes.push(textoLeitura(leitura.leitura, v.medidor));
-  return { id: v.id, titulo: `Nº ${v.numero} · ${v.nome}`, detalhe: partes.filter(Boolean).join(' · ') };
+  return { id: v.id, titulo: `${codigoBem(v) ?? `Nº ${v.numero}`} · ${v.nome}`, detalhe: partes.filter(Boolean).join(' · ') };
 }
 
 /** Produtos do estoque (com o saldo na fazenda): combustível do tanque, ou óleo, filtros e peças. */

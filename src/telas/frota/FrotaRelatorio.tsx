@@ -36,11 +36,11 @@ export default function FrotaRelatorio() {
   const { fazendaAtiva, fazendas } = useSessao();
   const fid = fazendaAtiva?.id;
   const [per, setPer] = useState<string[]>(['mes']);
-  const [filtro, setFiltro] = useState<string[]>(['todas']);
   const [linhas, setLinhas] = useState<PorVeiculo[] | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const { de, ate, texto } = periodo(per[0]);
-  const soEsta = filtro[0] === 'esta';
+  // V169: o que é de uma fazenda só aparece nela
+  const soEsta = true;
 
   const carregar = useCallback(async () => {
     setLinhas(null);
@@ -103,16 +103,6 @@ export default function FrotaRelatorio() {
         valor={per}
         aoMudar={setPer}
       />
-      {fazendas.length > 1 && (
-        <Escolha
-          opcoes={[
-            { valor: 'todas', rotulo: 'Todas as fazendas' },
-            { valor: 'esta', rotulo: fazendaAtiva?.nome ?? 'Esta fazenda' },
-          ]}
-          valor={filtro}
-          aoMudar={setFiltro}
-        />
-      )}
       <Text style={estilos.nota}>De {doBanco(de)} a {doBanco(ate)}. Combustível do tanque pelo custo médio do estoque; do posto, pelo valor pago (com o Arla 32). Manutenção = serviço + peças do estoque.</Text>
 
       {!linhas && <ActivityIndicator size="large" color={cores.primaria} style={{ marginTop: 24 }} />}

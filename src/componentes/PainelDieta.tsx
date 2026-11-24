@@ -23,6 +23,8 @@ type Props = {
   cabecas: number;
   tituloFicha: string;
   data: string;
+  /** V175: tratos por dia (a ficha mostra quanto vai em cada trato) */
+  tratos?: number;
 };
 
 /** Balanço da dieta (exigido x fornecido), custos, alertas e a ficha do trato. Só mostra; não altera nada. */
@@ -37,7 +39,7 @@ export default function PainelDieta(p: Props) {
   }
 
   async function compartilhar() {
-    const r = await compartilharTexto(textoFicha({ titulo: p.tituloFicha, data: p.data, cabecas: cab, itens: p.itens, b }));
+    const r = await compartilharTexto(textoFicha({ titulo: p.tituloFicha, data: p.data, cabecas: cab, itens: p.itens, b, tratos: p.tratos }));
     if (r === 'copiado') Alert.alert('Ficha copiada', 'O texto da ficha foi copiado. Cole no WhatsApp, no e-mail ou onde quiser.');
   }
 

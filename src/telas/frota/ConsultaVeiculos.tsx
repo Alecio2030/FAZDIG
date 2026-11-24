@@ -10,21 +10,25 @@ import Vazio from '../../componentes/Vazio';
 import { useSessao } from '../../contexto/SessaoContext';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
 import { limparBusca } from '../../lib/useBusca';
-import { ROTULO_TIPO_VEICULO, ROTULO_USO, lerLeiturasAtuais, textoLeitura, type LeituraAtual } from '../../lib/frota';
+import { codigoBem, ROTULO_TIPO_VEICULO, ROTULO_USO, lerLeiturasAtuais, textoLeitura, type LeituraAtual } from '../../lib/frota';
 import type { NavPilha } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
+
+/** V165: só os bens do Imobilizado com "Controlar na Frota", com o código do bem. */
+const SEL = '*, bem:imobilizados ( codigo_patrimonial )';
 
 /** Consulta da frota: busca pelo nome, placa, marca ou nº; ou a relação da frota em uso. Tocando, abre a ficha. */
 export default function ConsultaVeiculos() {
   const navegacao = useNavigation<NavPilha>();
-  const { fazendas } = useSessao();
+  const { fazendas, fazendaAtiva } = useSessao();
+  const fid = fazendaAtiva?.id ?? null; // V169: o que é de uma fazenda só aparece nela
   const [busca, setBusca] = useState('');
   const [achados, setAchados] = useState<any[] | null>(null);
   const [relacao, setRelacao] = useState<any[] | null>(null);
   const [leituras, setLeituras] = useState<Record<string, LeituraAtual>>({});
   const [erro, setErro] = useState<string | null>(null);
   const termo = limparBusca(busca);
-  const nomeFazenda = (id: string) => (fazendas.length > 1 ? fazendas.find((f) => f.id === id)?.nome : null);
+  const nomeFazenda = (_id: string) => null as string | null; // V169: só a fazenda em uso
 
   useEffect(() => {
     lerLeiturasAtuais().then(setLeituras).catch(() => {});
@@ -39,17 +43,20 @@ export default function ConsultaVeiculos() {
       try {
         const partes = [`nome.ilike.*${termo}*`, `placa.ilike.*${termo}*`, `marca.ilike.*${termo}*`, `modelo.ilike.*${termo}*`];
         if (/^\d+$/.test(termo)) partes.unshift(`numero.eq.${termo}`);
-        setAchados(await consulta<any[]>(supabase.from('frota_veiculos').select('*').or(partes.join(',')).order('nome').limit(40)));
+        // V165: busca também pelo código do bem (ex.: FI 003)
+        const bens = await consulta<any[]>(supabase.from('imobilizados').select('id').ilike('codigo_patrimonial', `%${termo}%`).limit(40));
+        if (bens.length) partes.push(`imobilizado_id.in.(${bens.map((b) => b.id).join(',')})`);
+        setAchados(await consulta<any[]>(supabase.from('frota_veiculos').select(SEL).not('imobilizado_id', 'is', null).eq('fazenda_id', fid).or(partes.join(',')).order('nome').limit(40)));
       } catch (e) {
         setErro(traduzirErro(e));
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [termo]);
+  }, [termo, fid]);
 
   async function abrirRelacao() {
     try {
-      setRelacao(await consulta<any[]>(supabase.from('frota_veiculos').select('*').eq('ativo', true).order('uso').order('nome')));
+      setRelacao(await consulta<any[]>(supabase.from('frota_veiculos').select(SEL).not('imobilizado_id', 'is', null).eq('fazenda_id', fid).eq('ativo', true).order('uso').order('nome')));
     } catch (e) {
       setErro(traduzirErro(e));
     }
@@ -58,7 +65,7 @@ export default function ConsultaVeiculos() {
   const linha = (v: any) => (
     <Linha
       key={v.id}
-      titulo={`Nº ${v.numero} · ${v.nome}`}
+      titulo={`${codigoBem(v) ?? `Nº ${v.numero}`} · ${v.nome}`}
       linhas={[
         [ROTULO_TIPO_VEICULO[v.tipo], v.marca, v.modelo, v.ano, v.placa].filter(Boolean).join(' · '),
         [ROTULO_USO[v.uso], v.medidor !== 'nenhum' ? textoLeitura(leituras[v.id]?.leitura ?? v.leitura_inicial, v.medidor) : null, nomeFazenda(v.fazenda_id)].filter(Boolean).join(' · '),
@@ -72,7 +79,7 @@ export default function ConsultaVeiculos() {
   return (
     <>
       {erro && <Aviso tipo="erro" texto={erro} />}
-      <Busca valor={busca} aoMudar={setBusca} dica="Nome, placa, marca ou nº" />
+      <Busca valor={busca} aoMudar={setBusca} dica="Nome, placa, marca, código ou nº" />
       {!termo && !relacao && <Botao titulo="Relação da frota em uso" tipo="secundario" onPress={abrirRelacao} />}
       {relacao && !termo && <Text style={estilos.nota}>{relacao.length} em uso. Toque para abrir a ficha.</Text>}
       {lista && lista.length === 0 && <Vazio icone="car-sport-outline" texto={termo ? 'Nada encontrado com esse texto.' : 'Nenhum veículo cadastrado ainda.'} />}

@@ -7,15 +7,19 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import Tela from '../../componentes/Tela';
 import Campo from '../../componentes/Campo';
 import CampoMoeda from '../../componentes/CampoMoeda';
+import ParcelasIntermediarias, { CampoQtdeIntermediarias, ajustarIntermediarias, erroIntermediarias, gerarSerie, juntarParcelas, somaLinhas, type LinhaParcela } from '../../componentes/ParcelasIntermediarias';
 import CampoData from '../../componentes/CampoData';
 import Botao from '../../componentes/Botao';
 import Aviso from '../../componentes/Aviso';
 import Escolha from '../../componentes/Escolha';
 import Secao from '../../componentes/Secao';
 import SeletorLista, { type ItemLista } from '../../componentes/SeletorLista';
-import SeletorAnimais from '../../componentes/SeletorAnimais';
+import ItensVendaGado, { itemGadoVazio, itensGadoParaBanco, calcItem, cabecasItem, useLotesVenda, validarItensGado, type ItemGado, type SaldoFaixa } from '../../componentes/ItensVendaGado';
+import Interruptor from '../../componentes/Interruptor';
 import CampoBuscaRapida, { type ItemRapido } from '../../componentes/CampoBuscaRapida';
 import CampoPessoaBusca from '../../componentes/CampoPessoaBusca';
+import ResumoPessoa from '../../componentes/ResumoPessoa';
+import { lerFazendasCliente, type FazendaCliente } from '../../componentes/FazendasCliente';
 import AbasCadastro, { type Aba } from '../../componentes/AbasCadastro';
 import ConsultaVendas from './ConsultaVendas';
 import { useSessao } from '../../contexto/SessaoContext';
@@ -24,10 +28,9 @@ import { centroDaUnidade } from '../../lib/unidades';
 import { dataValida, doBanco, hojeBanco, hojeBR, paraBanco } from '../../lib/datas';
 import { formatarMoeda, formatarNumero, lerNumero, moedaParaCampo, numeroParaCampo } from '../../lib/formatos';
 import { ROTULO_CATEGORIA_INSUMO, saldoDe, textoSaldo } from '../../lib/insumos';
-import { codigoLote, nomeLote } from '../../lib/rebanho';
 import { useSigla } from '../../lib/useSigla';
 import { somarDias } from '../../lib/reproducao';
-import { calcularVendaAnimais, r2v, textoFormaPreco, type FormaPreco } from '../../lib/vendas';
+import { r2v } from '../../lib/vendas';
 import { CAMPOS_POSICAO, nomeLocal, posicoes, rotuloTipo, type Posicao } from '../../lib/armazem';
 import { textoSacas } from '../../lib/posColheita';
 import { cotacaoReferencia, lerCotacoes, type Cotacao } from '../../lib/cotacoes';
@@ -35,14 +38,23 @@ import { aCompensar, lerContratos, rotuloContrato, saldoSacas, textoPreco, type 
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
-type Item = { chave: string; tipo: 'outro' | 'insumo'; insumoId: string | null; unidade: string; descricao: string; qtd: string; unit: string; total: string };
+type Item = { chave: string; tipo: 'outro' | 'insumo'; insumoId: string | null; unidade: string; descricao: string; qtd: string; unit: string; total: string; /** V198: custo médio do estoque (por unidade de estoque) */ custo?: number | null };
 type Rateio = { chave: string; centroId: string | null; perc: string };
 type Parcela = { chave: string; venc: string; valor: string };
-type InfoLote = { id: string; numero: number; descricao: string | null; cabecas: number };
+type Faixa = { sexo: 'M' | 'F'; faixa: string; idade_de: number; idade_ate: number | null; cabecas: number };
 
 let cont = 0;
 const chave = () => `v${Date.now()}_${cont++}`;
 const n = (t: string) => lerNumero(t);
+const UNIDADES_OUTRO = [
+  { valor: 'un', rotulo: 'Unidade' },
+  { valor: 'kg', rotulo: 'kg' },
+  { valor: 'cx', rotulo: 'Caixa' },
+  { valor: 'sc', rotulo: 'Saca' },
+  { valor: 't', rotulo: 'Tonelada' },
+  { valor: 'dz', rotulo: 'Dúzia' },
+  { valor: 'l', rotulo: 'Litro' },
+];
 const itemVazio = (): Item => ({ chave: chave(), tipo: 'outro', insumoId: null, unidade: 'un', descricao: '', qtd: '1', unit: '', total: '' });
 
 /** Mais › Vendas: animais (dá baixa no rebanho) e outros produtos e serviços. Gera o contas a receber. */
@@ -58,10 +70,13 @@ export default function VendaForm() {
     if (!fid) return;
     supabase
       .from('fazendas')
-      .select('nome, razao_social, cpf_cnpj')
+      .select('nome, razao_social, cpf_cnpj, uf')
       .eq('id', fid)
       .maybeSingle()
-      .then(({ data }) => setFaturadoPor((data as any)?.cpf_cnpj ? `${(data as any).razao_social ?? (data as any).nome} · ${(data as any).cpf_cnpj}` : null));
+      .then(({ data }) => {
+        setGtaUf((u) => u || String((data as any)?.uf ?? '').trim().toUpperCase());
+        setFaturadoPor((data as any)?.cpf_cnpj ? `${(data as any).razao_social ?? (data as any).nome} · ${(data as any).cpf_cnpj}` : null);
+      });
   }, [fid]);
 
   const [aba, setAba] = useState<Aba>(params?.aba ?? 'cadastrar');
@@ -69,25 +84,65 @@ export default function VendaForm() {
   const [data, setData] = useState(hojeBR());
   const [tipo, setTipo] = useState<string[]>([params?.contratoId ? 'cafe' : 'animais']);
   const [pessoaId, setPessoaId] = useState<string | null>(null);
+  // V159: fazenda do cliente (produtor rural) para onde vai a mercadoria, e a GTA da venda de gado
+  const [fazCliente, setFazCliente] = useState<FazendaCliente[]>([]);
+  const [fatId, setFatId] = useState<string | null>(null);
+  const [gtaNum, setGtaNum] = useState('');
+  const [gtaSerie, setGtaSerie] = useState('');
+  const [gtaUf, setGtaUf] = useState('');
+  useEffect(() => {
+    setFatId(null);
+    if (!pessoaId) return setFazCliente([]);
+    lerFazendasCliente(pessoaId)
+      .then((l) => {
+        setFazCliente(l);
+        if (l.length === 1) setFatId(l[0].id ?? null);
+      })
+      .catch(() => setFazCliente([]));
+  }, [pessoaId]);
+  // V193: cliente que é titular de outra fazenda do Grupo: venda de uma e compra da outra (mesmo CPF/CNPJ é transferência)
+  const [fazGrupo, setFazGrupo] = useState<{ id: string; nome: string; ie: string }[]>([]);
+  const [mesmoTitular, setMesmoTitular] = useState(false);
+  const [destinoId, setDestinoId] = useState<string | null>(null);
+  useEffect(() => {
+    setFazGrupo([]);
+    setMesmoTitular(false);
+    setDestinoId(null);
+    if (!pessoaId || !fid) return;
+    (async () => {
+      const dig = (t: unknown) => String(t ?? '').replace(/\D/g, '');
+      const [pe, fs] = await Promise.all([
+        supabase.from('pessoas').select('cpf_cnpj').eq('id', pessoaId).maybeSingle(),
+        supabase.from('fazendas').select('id, nome, cpf_cnpj, inscricao_estadual'),
+      ]);
+      const doc = dig(pe.data?.cpf_cnpj);
+      if (!doc) return;
+      const lista = ((fs.data ?? []) as any[]).filter((f) => dig(f.cpf_cnpj) === doc);
+      if (lista.some((f) => f.id === fid)) return setMesmoTitular(true);
+      setFazGrupo(lista.map((f) => ({ id: f.id, nome: f.nome, ie: dig(f.inscricao_estadual) })));
+      if (lista.length === 1) setDestinoId(lista[0].id);
+    })().catch(() => setFazGrupo([]));
+  }, [pessoaId, fid]);
+  // V194: a fazenda do cliente escolhida (mesmo CPF/CNPJ e mesma Inscrição Estadual) já diz qual fazenda do Grupo compra
+  const destinoPelaIE = (() => {
+    const ie = String(fazCliente.find((f) => f.id === fatId)?.inscricao_estadual ?? '').replace(/\D/g, '');
+    return ie ? fazGrupo.find((f) => f.ie === ie) ?? null : null;
+  })();
+  useEffect(() => {
+    if (destinoPelaIE) setDestinoId(destinoPelaIE.id);
+  }, [destinoPelaIE?.id]);
   const [documento, setDocumento] = useState('');
-  // animais
-  const [numPesagem, setNumPesagem] = useState('');
-  const [pesagem, setPesagem] = useState<{ id: string; numero: number; texto: string; porBrinco: boolean } | null>(null);
-  const [puxando, setPuxando] = useState(false);
-  const [lote, setLote] = useState<InfoLote | null>(null);
-  const [modo, setModo] = useState<string[]>(['quantidade']);
-  const [quantidade, setQuantidade] = useState('');
-  const [animais, setAnimais] = useState<string[]>([]);
-  const [peso, setPeso] = useState('');
-  const [forma, setForma] = useState<string[]>(['arroba']);
-  const [kgArroba, setKgArroba] = useState('30');
-  const [barrigaTipo, setBarrigaTipo] = useState<string[]>(['nao']);
-  const [barrigaValor, setBarrigaValor] = useState('');
-  const [preco, setPreco] = useState('');
-  // outros
+  const [docSerie, setDocSerie] = useState('');
+  // V203: gado em itens (cada item com sexo, idade, lote, peso e preço próprios)
+  const [itensGado, setItensGado] = useState<ItemGado[]>([itemGadoVazio()]);
+  const lotesVenda = useLotesVenda(fid);
+  const [gadoFica, setGadoFica] = useState(false);
+  const [estoqueRebanho, setEstoqueRebanho] = useState<Faixa[] | null>(null);
+  // V191: saldo do Estoque de gado por sexo e faixa (null = a fazenda não usa)
+  const [estoqueGado, setEstoqueGado] = useState<{ chave: string; sexo: string; faixa: number; saldo: number; saldo_gta: number }[] | null>(null);
   const [itens, setItens] = useState<Item[]>([itemVazio()]);
   // descontos na nota
-  const [descAberto, setDescAberto] = useState(false);
+  const [descAberto, setDescAberto] = useState(true);
   const [funPerc, setFunPerc] = useState('');
   const [funValor, setFunValor] = useState('');
   const [comissao, setComissao] = useState('');
@@ -97,10 +152,14 @@ export default function VendaForm() {
   const [rateio, setRateio] = useState<Rateio[]>([]);
   const [bancoId, setBancoId] = useState<string | null>(null);
   const [pagto, setPagto] = useState<string[]>(['avista']);
-  const [nParc, setNParc] = useState('2');
+  const [nParc, setNParc] = useState('1');
+  const [prazo1, setPrazo1] = useState('30');
   const [primeiro, setPrimeiro] = useState('');
   const [intervalo, setIntervalo] = useState('30');
   const [parcelas, setParcelas] = useState<Parcela[]>([]);
+  const [nInterm, setNInterm] = useState('0');
+  const [interm, setInterm] = useState<LinhaParcela[]>([]);
+  const [fixo, setFixo] = useState('');
   const [obs, setObs] = useState('');
   // excluir uma venda já lançada
   const [excluirAberto, setExcluirAberto] = useState(false);
@@ -121,7 +180,6 @@ export default function VendaForm() {
   // entrega de contrato de café (venda futura ou troca por insumos)
   const [contratos, setContratos] = useState<ContratoCafe[]>([]);
   const [contrato, setContrato] = useState<ContratoCafe | null>(null);
-  const formaPreco = forma[0] as FormaPreco;
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: 'Vendas' });
@@ -173,28 +231,23 @@ export default function VendaForm() {
   }
 
   // ---- cálculo ----
-  const cab = modo[0] === 'quantidade' ? Number(quantidade || 0) : animais.length;
-  /** desconto de barriga só entra na venda por arroba ou por kg */
-  const usaBarriga = formaPreco !== 'cabeca' && barrigaTipo[0] !== 'nao';
-  const calc = calcularVendaAnimais({
-    cabecas: cab,
-    pesoBruto: n(peso) ?? 0,
-    forma: formaPreco,
-    kgArroba: n(kgArroba) ?? 0,
-    barrigaTipo: usaBarriga ? (barrigaTipo[0] as 'perc' | 'kg_cab') : null,
-    barrigaValor: n(barrigaValor) ?? 0,
-    preco: n(preco) ?? 0,
-  });
+  const cab = itensGado.reduce((t, it) => t + cabecasItem(it), 0);
+  const valorGado = r2v(itensGado.reduce((t, it) => t + calcItem(it).valor, 0));
+  const pesoGado = itensGado.reduce((t, it) => t + (n(it.peso) ?? 0), 0);
+  const arrobasGado = itensGado.reduce((t, it) => t + calcItem(it).arrobas, 0);
   const somaItens = itens.reduce((s, i) => s + (n(i.total) ?? 0), 0);
   const cafeMarcado = (posCafe ?? []).filter((x) => cafeSel[x.chave]);
   const valorCafe = (x: Posicao) => r2v((n(cafeSel[x.chave]?.sacas ?? '') ?? 0) * (n(cafeSel[x.chave]?.preco ?? '') ?? 0));
   const sacasCafe = cafeMarcado.reduce((s, x) => s + (n(cafeSel[x.chave].sacas) ?? 0), 0);
   const somaCafe = cafeMarcado.reduce((s, x) => s + valorCafe(x), 0);
-  const bruto = deAnimais ? calc.valor : deCafe ? r2v(somaCafe) : r2v(somaItens);
+  const bruto = deAnimais ? valorGado : deCafe ? r2v(somaCafe) : r2v(somaItens);
   const descontos = r2v((n(funValor) ?? 0) + (n(comissao) ?? 0) + (n(frete) ?? 0) + (n(outrosDesc) ?? 0));
   const liquido = r2v(bruto - descontos);
   const somaRateio = rateio.reduce((s, x) => s + (n(x.perc) ?? 0), 0);
-  const somaParcelas = parcelas.reduce((s, x) => s + (n(x.valor) ?? 0), 0);
+  // V170: intermediárias só no a prazo
+  const somaInterm = pagto[0] !== 'avista' ? somaLinhas(interm) : 0;
+  const valorFixo = pagto[0] !== 'avista' && interm.length ? n(fixo) ?? 0 : 0;
+  const somaParcelas = r2v(parcelas.reduce((s, x) => s + (n(x.valor) ?? 0), 0) + somaInterm);
   const contratoAtivo = deCafe ? contrato : null;
   const faltaContrato = contratoAtivo ? saldoSacas(contratoAtivo) : 0;
   /** o que esta entrega quita sem dinheiro: adiantamento ainda não abatido, ou a compra da troca */
@@ -211,76 +264,53 @@ export default function VendaForm() {
   useEffect(() => {
     if (liquido <= 0) return setParcelas([]);
     if (pagto[0] === 'avista') return setParcelas([{ chave: chave(), venc: data, valor: moedaParaCampo(liquido) }]);
-    const q = Math.max(1, Math.min(60, Number(nParc) || 1));
-    const base = paraBanco(primeiro) ?? (paraBanco(data) ? somarDias(paraBanco(data)!, Number(intervalo) || 30) : null);
+    const q = Math.max(1, Math.min(120, Number(nParc) || 1));
+    // V203: prazo em dias (contados da data da venda) ou data certa do 1º vencimento
+    const base = pagto[0] === 'dias' ? (paraBanco(data) ? somarDias(paraBanco(data)!, Number(prazo1) || 0) : null) : paraBanco(primeiro) ?? (paraBanco(data) ? somarDias(paraBanco(data)!, Number(intervalo) || 30) : null);
     if (!base) return;
-    const cada = Math.floor((liquido / q) * 100) / 100;
-    const ultima = r2v(liquido - cada * (q - 1));
-    setParcelas(Array.from({ length: q }, (_, i) => ({ chave: chave(), venc: doBanco(somarDias(base, i * (Number(intervalo) || 30))), valor: moedaParaCampo(i === q - 1 ? ultima : cada) })));
+    // V170: as normais dividem o que sobra depois das intermediárias (ou têm o valor fixo informado)
+    const restante = r2v(liquido - somaInterm);
+    if (restante <= 0 && valorFixo <= 0) return setParcelas([]);
+    setParcelas(gerarSerie(q, base, Number(intervalo) || 30, restante, valorFixo));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pagto[0], nParc, primeiro, intervalo, liquido, pagto[0] === 'avista' ? data : '']);
+  }, [pagto[0], nParc, primeiro, intervalo, prazo1, liquido, pagto[0] !== 'data' ? data : '', somaInterm, valorFixo]);
+  useEffect(() => {
+    setInterm((l) => ajustarIntermediarias(l, pagto[0] !== 'avista' ? nInterm : '0'));
+  }, [nInterm, pagto[0]]);
 
-  // ---- lotes e pesagem ----
-  const lerLote = useCallback(async (id: string): Promise<InfoLote> => {
-    const [l, c] = await Promise.all([
-      consulta<any>(supabase.from('lotes').select('id, numero, descricao').eq('id', id).single()),
-      supabase.from('animais').select('id', { count: 'exact', head: true }).eq('lote_id', id).eq('situacao', 'ativo'),
-    ]);
-    return { ...l, cabecas: c.count ?? 0 };
-  }, []);
-  const carregarLotes = useCallback(async (): Promise<ItemLista[]> => {
-    const d = await consulta<any[]>(supabase.from('lotes').select('id, numero, descricao, sexo').eq('fazenda_id', fid!).eq('situacao', 'ativo').order('numero'));
-    return d.map((l) => ({ id: l.id, titulo: nomeLote(l, sigla), detalhe: l.sexo === 'M' ? 'Lote de machos' : l.sexo === 'F' ? 'Lote de fêmeas' : 'Sexo não definido' }));
-  }, [fid, sigla]);
-  async function escolherLote(id: string | null) {
-    setAnimais([]);
-    setLote(id ? await lerLote(id).catch(() => null) : null);
-  }
-  function soltarPesagem() {
-    if (!pesagem) return;
-    setPesagem(null);
-    setQuantidade('');
-    setPeso('');
-  }
-  async function puxarPesagem() {
-    setErros((e) => ({ ...e, pesagem: '' }));
-    const num = Number(numPesagem);
-    if (!Number.isInteger(num) || num < 1) return setErros((e) => ({ ...e, pesagem: 'Informe o número da pesagem.' }));
-    setPuxando(true);
-    try {
-      const lista = await consulta<any[]>(
-        supabase
-          .from('pesagens')
-          .select('id, numero, data, lote_id, destino_pessoa_id, peso_arroba, itens:pesagem_itens ( quantidade, peso_bruto_kg, brinco ), mov:movimentacoes ( id )')
-          .eq('fazenda_id', fid!)
-          .eq('numero', num)
-          .limit(1),
-      );
-      const x = lista[0];
-      if (!x) return setErros((e) => ({ ...e, pesagem: `Pesagem nº ${num} não encontrada nesta fazenda.` }));
-      if ((Array.isArray(x.mov) ? x.mov : x.mov ? [x.mov] : []).length) return setErros((e) => ({ ...e, pesagem: `A pesagem nº ${num} já foi usada em outra movimentação ou venda.` }));
-      const its = x.itens as { quantidade: number; peso_bruto_kg: number; brinco: string | null }[];
-      const cabP = its.reduce((s, i) => s + i.quantidade, 0);
-      const kg = its.reduce((s, i) => s + Number(i.peso_bruto_kg), 0);
-      setData(doBanco(x.data));
-      setModo(['quantidade']);
-      setQuantidade(String(cabP));
-      setPeso(numeroParaCampo(kg));
-      if (Number(x.peso_arroba) > 0) setKgArroba(numeroParaCampo(x.peso_arroba));
-      if (x.lote_id) await escolherLote(x.lote_id);
-      if (x.destino_pessoa_id) setPessoaId(x.destino_pessoa_id);
-      setPesagem({
-        id: x.id,
-        numero: x.numero,
-        porBrinco: its.length > 0 && its.every((i) => i.brinco && i.quantidade === 1),
-        texto: `${formatarNumero(cabP)} cab., ${formatarNumero(kg, 1)} kg brutos, em ${doBanco(x.data)}.`,
+  // ---- estoque (para o gado que sai do rebanho por sexo e idade) ----
+  useEffect(() => {
+    if (!deAnimais || !fid) return;
+    supabase.rpc('estoque_gado_faixas', { p_fazenda: fid }).then(({ data }) => setEstoqueRebanho(((data ?? []) as Faixa[])));
+    // V191: com lançamento no Estoque de gado, a venda olha o saldo dele (o rebanho é o Total)
+    supabase
+      .from('estoque_fiscal_lanc')
+      .select('id', { count: 'exact', head: true })
+      .eq('fazenda_id', fid)
+      .then(({ count }) => {
+        if (!count) return setEstoqueGado(null);
+        supabase.rpc('estoque_fiscal_gado', { p_fazenda: fid, p_data: hojeBanco() }).then(({ data }) => setEstoqueGado((data ?? []) as any[]));
       });
-    } catch (e) {
-      setErro(traduzirErro(e));
-    } finally {
-      setPuxando(false);
-    }
-  }
+  }, [deAnimais, fid]);
+  // V199: na implantação a venda aceita Estoque de gado negativo (Financeiro › Parâmetros › Pecuária)
+  const [aceitaNegativo, setAceitaNegativo] = useState(false);
+  useEffect(() => {
+    supabase
+      .from('parametros')
+      .select('valor, valor_padrao')
+      .eq('chave', 'venda_gado_negativo')
+      .maybeSingle()
+      .then(({ data: p }) => setAceitaNegativo(Number(p?.valor ?? p?.valor_padrao ?? 0) === 1));
+  }, []);
+  // V191: com NF e GTA informadas, só vale o estoque Com GTA; sem elas, o Total
+  const comGta = !!documento.trim() && !!gtaNum.trim();
+  const estoque: Faixa[] | null = estoqueGado
+    ? estoqueGado
+        .map((x) => ({ sexo: x.sexo as 'M' | 'F', faixa: x.chave, idade_de: x.faixa, idade_ate: null, cabecas: Math.max(comGta ? x.saldo_gta : x.saldo, 0) }))
+        .filter((x) => x.cabecas > 0)
+    : estoqueRebanho;
+  const nomeEstoque = estoqueGado ? (comGta ? 'No Estoque de gado (com GTA)' : 'No Estoque de gado') : 'No rebanho';
+  const saldosGado: SaldoFaixa[] | null = estoque ? estoque.map((x) => ({ sexo: x.sexo, idade_de: x.idade_de, cabecas: x.cabecas })) : null;
 
   // ---- outros produtos e serviços ----
   const mudar = (k: string, campos: Partial<Item>) => setItens((l) => l.map((i) => (i.chave === k ? { ...i, ...campos } : i)));
@@ -298,7 +328,17 @@ export default function VendaForm() {
   async function escolherProduto(k: string, iid: string | null) {
     if (!iid) return mudar(k, { insumoId: null });
     const { data: p } = await supabase.from('insumos').select('nome, unidade').eq('id', iid).single();
-    mudar(k, { insumoId: iid, unidade: p?.unidade ?? 'un', descricao: p?.nome ?? '' });
+    // V198: traz o custo médio do estoque e já propõe o valor de venda igual ao custo (pode mudar)
+    const { data: cm } = await supabase.rpc('custo_medio_insumo', { p_insumo: iid, p_fazenda: fid, p_data: paraBanco(data) ?? new Date().toISOString().slice(0, 10) });
+    const custo = cm != null ? Number(cm) : null;
+    setItens((l) =>
+      l.map((i) => {
+        if (i.chave !== k) return i;
+        const unit = custo != null ? moedaParaCampo(r2v(custo)) : i.unit;
+        const q = n(i.qtd), u = n(unit);
+        return { ...i, insumoId: iid, unidade: p?.unidade ?? 'un', descricao: p?.nome ?? '', custo, unit, total: q != null && u != null ? moedaParaCampo(r2v(q * u)) : i.total };
+      }),
+    );
   }
   function mudarQtdOuUnit(it: Item, campo: 'qtd' | 'unit', t: string) {
     const q = campo === 'qtd' ? n(t) : n(it.qtd);
@@ -317,7 +357,7 @@ export default function VendaForm() {
   }, [fid]);
 
   // ---- salvar ----
-  async function salvar() {
+  async function salvar(semGtaConfirmado?: unknown) {
     setErro(null);
     setAviso(null);
     const e: Record<string, string> = {};
@@ -325,18 +365,13 @@ export default function VendaForm() {
     if (!iso) e.data = 'Informe a data da venda.';
     else if (iso > hojeBanco()) e.data = 'A data da venda não pode ser futura.';
     if (!pessoaId) e.pessoa = 'Informe o cliente.';
+    else if (mesmoTitular) e.pessoa = 'O cliente é o titular desta fazenda: entre fazendas do mesmo titular é transferência (Mais › Transferências).';
+    else if (fazGrupo.length && !destinoId) e.pessoa = 'Escolha a fazenda do Grupo que compra.';
+    else if (fazGrupo.length && deCafe) e.pessoa = 'Venda de café entre fazendas do Grupo ainda não está pronta: use Mais › Transferências.';
     else if (contratoAtivo && pessoaId !== contratoAtivo.pessoa_id) e.pessoa = `O cliente tem de ser o do contrato: ${contratoAtivo.pessoa_nome}.`;
     if (deAnimais) {
-      if (!lote) e.lote = 'Escolha o lote de onde saem os animais.';
-      if (modo[0] === 'quantidade') {
-        if (!Number.isInteger(cab) || cab < 1) e.quantidade = 'Informe a quantidade de cabeças.';
-        else if (lote && cab > lote.cabecas) e.quantidade = `O lote só tem ${formatarNumero(lote.cabecas)} cabeças.`;
-      } else if (!animais.length) e.animais = 'Marque pelo menos um animal.';
-      if (formaPreco !== 'cabeca' && (n(peso) ?? 0) <= 0) e.peso = 'Informe o peso bruto total (kg).';
-      if (formaPreco === 'arroba' && (n(kgArroba) ?? 0) <= 0) e.kgArroba = 'Informe os kg da arroba.';
-      if (usaBarriga && (n(barrigaValor) ?? 0) <= 0) e.barriga = 'Informe o desconto de barriga, ou marque "Sem desconto".';
-      else if (formaPreco !== 'cabeca' && (n(peso) ?? 0) > 0 && calc.pesoLiquido <= 0) e.barriga = 'O desconto de barriga não pode zerar o peso.';
-      if ((n(preco) ?? 0) <= 0) e.preco = 'Informe o preço.';
+      Object.assign(e, validarItensGado(itensGado, lotesVenda, saldosGado, !(estoqueGado && aceitaNegativo), nomeEstoque));
+      if (gadoFica && fazGrupo.length) e.gadoFica = 'Venda para fazenda do Grupo não usa "o gado fica na fazenda".';
     } else if (deCafe) {
       if (!cafeMarcado.length) e.cafe = 'Marque o café que foi vendido.';
       else if (contratoAtivo && sacasCafe > faltaContrato + 0.005) e.cafe = `O contrato nº ${contratoAtivo.numero} só tem ${textoSacas(faltaContrato)} a entregar. O que passar vai em outra venda, sem contrato.`;
@@ -361,7 +396,9 @@ export default function VendaForm() {
       else if (Math.abs(somaRateio - 100) > 0.001) e.rateio = `O rateio soma ${formatarNumero(somaRateio, 2)}%: precisa fechar 100%.`;
     }
     if (liquido > 0) {
-      if (!parcelas.length || parcelas.some((p) => !dataValida(p.venc) || (n(p.valor) ?? 0) <= 0)) e.parcelas = 'Confira o vencimento e o valor de cada parcela.';
+      const eInt = pagto[0] !== 'avista' ? erroIntermediarias(interm) : null;
+      if (eInt) e.parcelas = eInt;
+      else if (!parcelas.length || parcelas.some((p) => !dataValida(p.venc) || (n(p.valor) ?? 0) <= 0)) e.parcelas = 'Confira o vencimento e o valor de cada parcela.';
       else if (Math.abs(somaParcelas - liquido) > 0.009) e.parcelas = `As parcelas somam ${formatarMoeda(somaParcelas)} e o valor a receber é ${formatarMoeda(liquido)}.`;
     }
     setErros(e);
@@ -374,25 +411,19 @@ export default function VendaForm() {
       data: iso,
       pessoa_id: pessoaId,
       numero_documento: documento,
+      documento_serie: docSerie,
       conta_contabil_id: null, // classificação automática: o banco define pelo tipo da venda (bovinos, café ou outras receitas)
       conta_bancaria_id: bancoId,
-      forma_pagamento: pagto[0],
+      forma_pagamento: pagto[0] === 'avista' ? 'avista' : 'prazo',
+      fazenda_destino_id: fazGrupo.length ? destinoId ?? '' : '',
       observacoes: obs,
-      animais: deAnimais
-        ? {
-            lote_origem: lote!.id,
-            quantidade: modo[0] === 'quantidade' ? cab : 0,
-            animais: modo[0] === 'quantidade' ? [] : animais,
-            pesagem: pesagem?.id ?? '',
-            peso_bruto: n(peso) ?? '',
-            forma_preco: formaPreco,
-            kg_arroba: n(kgArroba) ?? '',
-            barriga_tipo: usaBarriga ? barrigaTipo[0] : '',
-            barriga_valor: usaBarriga ? n(barrigaValor) : '',
-            preco: n(preco),
-            valor_bruto: bruto,
-          }
-        : null,
+      pessoa_faturamento_id: fatId ?? '',
+      gta_numero: deAnimais ? gtaNum.trim() : '',
+      gta_serie: deAnimais ? gtaSerie.trim() : '',
+      gta_uf: deAnimais ? gtaUf.trim() : '',
+      // V203: gado em itens; "o gado fica na fazenda" vira estoque de terceiros do comprador
+      itens_gado: deAnimais ? itensGadoParaBanco(itensGado, lotesVenda) : [],
+      gado_fica: deAnimais && gadoFica,
       itens: deAnimais
         ? []
         : deCafe
@@ -411,7 +442,7 @@ export default function VendaForm() {
             insumo_id: i.tipo === 'insumo' ? i.insumoId : null,
             descricao: i.descricao,
             quantidade: n(i.qtd) ?? 1,
-            unidade: i.tipo === 'insumo' ? i.unidade : 'un',
+            unidade: i.unidade || 'un',
             valor_unitario: n(i.unit) ?? '',
             valor_total: n(i.total),
           })),
@@ -421,8 +452,20 @@ export default function VendaForm() {
       frete: n(frete) ?? 0,
       outros_descontos: n(outrosDesc) ?? 0,
       rateio: rateio.map((x) => ({ centro_custo_id: x.centroId, percentual: n(x.perc) })),
-      parcelas: parcelas.map((x) => ({ vencimento: paraBanco(x.venc), valor: n(x.valor) })),
+      parcelas: juntarParcelas(parcelas, pagto[0] !== 'avista' ? interm : []),
     };
+    // V161: a venda grava sem a GTA, mas avisa que o gado só pode ser transportado com ela (e com a NF, onde for obrigatória)
+    if (deAnimais && !gtaNum.trim() && semGtaConfirmado !== true) {
+      Alert.alert(
+        'Venda sem GTA',
+        'O gado só pode ser transportado com a GTA (e com a nota fiscal, no estado em que ela for obrigatória). Você pode gravar a venda agora e informar a GTA depois, na consulta da venda.',
+        [
+          { text: 'Voltar e informar', style: 'cancel' },
+          { text: 'Gravar sem a GTA', onPress: () => void salvar(true) },
+        ],
+      );
+      return;
+    }
     setSalvando(true);
     const { data: r, error } = contratoAtivo ? await supabase.rpc('salvar_venda_contrato', { p: { ...p, cafe_contrato_id: contratoAtivo.id } }) : await supabase.rpc('salvar_venda', { p });
     setSalvando(false);
@@ -432,14 +475,28 @@ export default function VendaForm() {
     const textoContrato = contratoAtivo
       ? ` Contrato nº ${contratoAtivo.numero}: ${Number(res.saldo_sacas ?? 0) > 0 ? `faltam ${textoSacas(Number(res.saldo_sacas))}` : 'concluído'}${comp > 0 ? `; ${formatarMoeda(comp)} ${contratoAtivo.tipo === 'troca' ? 'quitaram a compra dos insumos' : 'foram abatidos do adiantamento'} sem movimentar dinheiro; fica a receber ${formatarMoeda(Math.max(0, Number(res.liquido) - comp))}` : ''}.`
       : '';
-    const receber = parcelas.length === 1 ? '1 título no contas a receber' : `${parcelas.length} parcelas no contas a receber`;
-    navegacao.replace('VendaForm', {
-      aviso: deAnimais
-        ? `Venda nº ${res.numero} gravada: ${formatarNumero(res.cabecas ?? cab)} ${(res.cabecas ?? cab) === 1 ? 'cabeça saiu' : 'cabeças saíram'} do lote ${codigoLote(lote!.numero, sigla)}, ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`
+    const nInt = pagto[0] !== 'avista' ? interm.length : 0;
+    const receber = parcelas.length + nInt === 1 ? '1 título no contas a receber' : nInt ? `${nInt} intermediária${nInt > 1 ? 's' : ''} e ${parcelas.length} parcela${parcelas.length > 1 ? 's' : ''} no contas a receber` : `${parcelas.length} parcelas no contas a receber`;
+    const textoAviso = deAnimais
+        ? `Venda nº ${res.numero} gravada: ${itensGado.length} ${itensGado.length === 1 ? 'item' : 'itens'}, ${formatarNumero(res.cabecas ?? cab)} ${(res.cabecas ?? cab) === 1 ? 'cabeça saiu' : 'cabeças saíram'} do rebanho${gadoFica ? ' (ficam na fazenda, no estoque de terceiros do comprador)' : ''}, ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`
         : deCafe
           ? `Venda nº ${res.numero} gravada: ${textoSacas(sacasCafe)} de café saíram do armazém, ${formatarMoeda(Number(res.liquido))} ${comp > 0 ? 'no total' : 'a receber'} (${receber}).${textoContrato}`
-          : `Venda nº ${res.numero} gravada: ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`,
-    });
+          : `Venda nº ${res.numero} gravada: ${formatarMoeda(Number(res.liquido))} a receber (${receber}).`;
+    // V160: ao fechar a venda, pergunta se emite a NF-e agora (se já tem o nº da nota, foi emitida fora)
+    if (documento.trim()) return navegacao.replace('VendaForm', { aviso: `${textoAviso} NF nº ${documento.trim()} emitida fora do sistema: não se emite outra NF-e para esta venda.` });
+    let vendaId: string | null = (r as any)?.id ?? null;
+    if (!vendaId) {
+      const { data: vx } = await supabase.from('vendas').select('id').eq('fazenda_id', fid!).eq('numero', res.numero).maybeSingle();
+      vendaId = (vx as any)?.id ?? null;
+    }
+    Alert.alert('EMITIR NF?', `Venda nº ${res.numero} gravada. Quer emitir a NF-e desta venda agora?`, [
+      {
+        text: 'Agora não',
+        style: 'cancel',
+        onPress: () => navegacao.replace('VendaForm', { aviso: `${textoAviso} Para emitir a nota depois (sozinha ou junto com outras vendas do mesmo cliente): Mais › Notas fiscais › Emitir NF-e de vendas, com o nº ${res.numero}.` }),
+      },
+      { text: 'Emitir NF', onPress: () => (vendaId ? navegacao.replace('NotaFiscalEmitir', { vendaId }) : navegacao.replace('VendaForm', { aviso: textoAviso })) },
+    ]);
   }
 
   // ---- excluir uma venda já lançada (não se altera: exclui e lança de novo) ----
@@ -467,7 +524,6 @@ export default function VendaForm() {
             setExcluirNum('');
             setAviso(`Venda nº ${v.numero} excluída.`);
             recarregarTopo();
-            if (lote) escolherLote(lote.id);
           },
         },
       ],
@@ -484,7 +540,6 @@ export default function VendaForm() {
     );
   }
 
-  const nomePreco = textoFormaPreco(formaPreco);
 
   return (
     <Tela>
@@ -521,153 +576,93 @@ export default function VendaForm() {
         opcoes={[
           { valor: 'animais', rotulo: 'Animais' },
           { valor: 'cafe', rotulo: 'Café' },
-          { valor: 'outros', rotulo: 'Outros produtos e serviços' },
+          { valor: 'outros', rotulo: 'Outros produtos (mamão, banana, milho...) e serviços' },
         ]}
         valor={tipo}
         aoMudar={setTipo}
       />
       {faturadoPor ? <Text style={{ fontSize: 13, color: '#56625A' }}>Faturamento em nome de: {faturadoPor}</Text> : null}
       <CampoPessoaBusca rotulo="Cliente *" valorId={pessoaId} aoMudar={setPessoaId} tipoNovo="cliente" erro={erros.pessoa} />
-      <Campo rotulo={deAnimais ? 'Nº da nota / GTA' : 'Nº da nota / documento'} value={documento} onChangeText={setDocumento} autoCapitalize="characters" />
+      {/* V164: os dados do comprador logo abaixo; tocar no nome abre o cadastro */}
+      <ResumoPessoa pessoaId={pessoaId} />
+      {mesmoTitular && <Aviso tipo="erro" texto="O cliente é o titular desta fazenda: entre fazendas do mesmo titular é transferência (Mais › Transferências)." />}
+      {fazGrupo.length > 0 && !destinoPelaIE && (
+        <Escolha
+          rotulo="Fazenda do Grupo que compra *"
+          opcoes={fazGrupo.map((f) => ({ valor: f.id, rotulo: f.nome }))}
+          valor={destinoId ? [destinoId] : []}
+          aoMudar={(v) => setDestinoId(v[0] ?? null)}
+        />
+      )}
+      {fazCliente.length > 0 && (
+        <Escolha
+          rotulo="Fazenda do cliente (para onde vai)"
+          opcoes={fazCliente.map((f) => ({ valor: f.id!, rotulo: [f.nome_fazenda || 'Fazenda', f.municipio].filter(Boolean).join(' · ') }))}
+          valor={fatId ? [fatId] : []}
+          aoMudar={(v) => setFatId(v[0] ?? null)}
+        />
+      )}
+      {/* V160: número e série da Nota Fiscal (não obrigatório: se a NF-e for emitida por aqui, o número entra sozinho) */}
+      <View style={estilos.linha}>
+        <View style={{ flex: 2 }}>
+          <Campo rotulo="Nº da Nota Fiscal" value={documento} onChangeText={(t) => setDocumento(t.replace(/\D/g, ''))} keyboardType="number-pad" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Campo rotulo="Série" value={docSerie} onChangeText={(t) => setDocSerie(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
+        </View>
+      </View>
+      {/* V204: nº informado = NF já emitida fora do sistema; não se pergunta nem se emite outra (evita NF em duplicidade) */}
+      {documento.trim() ? (
+        <Aviso tipo="info" texto={`NF nº ${documento.trim()} já emitida fora do sistema: ao gravar, não pergunta da NF-e, e esta venda não entra em Emitir NF-e de vendas (assim não sai nota em duplicidade).`} />
+      ) : (
+        <Text style={estilos.nota}>Se ainda não tem a nota, deixe em branco: ao gravar, o sistema pergunta se quer emitir a NF-e agora, e o número entra sozinho.</Text>
+      )}
 
       {deAnimais ? (
         <>
-          {/* ---------- animais ---------- */}
-          <Secao titulo="Animais" />
-          <View style={estilos.linha}>
-            <View style={{ flex: 1 }}>
-              <Campo
-                rotulo="Nº da pesagem"
-                value={numPesagem}
-                onChangeText={(t) => {
-                  setNumPesagem(t.replace(/\D/g, '').slice(0, 6));
-                  soltarPesagem();
-                }}
-                keyboardType="number-pad"
-                placeholder="Se foi pesado"
-              />
-            </View>
-            <View style={{ width: 140, paddingTop: 26 }}>
-              <Botao titulo="Puxar dados" tipo="secundario" onPress={puxarPesagem} carregando={puxando} />
-            </View>
-          </View>
-          {erros.pesagem ? <Text style={estilos.erro}>{erros.pesagem}</Text> : null}
-          {pesagem && (
-            <Aviso
-              tipo="info"
-              texto={`Pesagem nº ${pesagem.numero}: ${pesagem.texto} Lote, cabeças e peso foram preenchidos.${pesagem.porBrinco ? ' Como todas as pesadas têm brinco de animais do lote, saem exatamente esses.' : ''}`}
-            />
-          )}
-          <SeletorLista rotulo="Lote de origem *" valorId={lote?.id ?? null} aoMudar={escolherLote} carregar={carregarLotes} erro={erros.lote} vazio="Nenhum lote ativo. Abra em Pecuário › Lotes." />
-          {lote && (
-            <>
-              <Text style={estilos.nota}>
-                {formatarNumero(lote.cabecas)} {lote.cabecas === 1 ? 'cabeça' : 'cabeças'} no lote agora.
-              </Text>
-              <Escolha
-                rotulo="Quais animais"
-                opcoes={[
-                  { valor: 'quantidade', rotulo: 'Por quantidade' },
-                  { valor: 'escolher', rotulo: 'Escolher os animais' },
-                ]}
-                valor={modo}
-                aoMudar={(v) => {
-                  setModo(v);
-                  if (v[0] === 'escolher' && pesagem) {
-                    setPesagem(null);
-                    setNumPesagem('');
-                  }
-                }}
-              />
-              {modo[0] === 'quantidade' ? (
-                <Campo
-                  rotulo="Quantidade de cabeças *"
-                  value={quantidade}
-                  onChangeText={(t) => setQuantidade(t.replace(/\D/g, '').slice(0, 4))}
-                  keyboardType="number-pad"
-                  ajuda={pesagem ? undefined : 'O sistema tira primeiro os sem brinco e, entre eles, os de número mais alto.'}
-                  erro={erros.quantidade}
-                />
-              ) : (
-                <SeletorAnimais loteId={lote.id} valor={animais} aoMudar={setAnimais} erro={erros.animais} />
-              )}
-            </>
-          )}
-
-          {/* ---------- peso e preço ---------- */}
-          <Secao titulo="Peso e preço" />
-          <Escolha
-            rotulo="Como é o preço"
-            opcoes={[
-              { valor: 'arroba', rotulo: 'Por arroba' },
-              { valor: 'kg', rotulo: 'Por kg vivo' },
-              { valor: 'cabeca', rotulo: 'Por cabeça' },
-            ]}
-            valor={forma}
-            aoMudar={setForma}
+          {/* ---------- animais (V203: em itens) ---------- */}
+          <Secao titulo="Itens da venda" />
+          {estoqueGado && aceitaNegativo ? (
+            <Aviso tipo="info" texto="Implantação: a venda grava mesmo sem saldo no Estoque de gado (fica negativo). Para voltar a bloquear: Financeiro › Parâmetros › Pecuária, ponha 0." />
+          ) : null}
+          <ItensVendaGado
+            itens={itensGado}
+            setItens={setItensGado}
+            lotes={lotesVenda}
+            fid={fid!}
+            dataIso={paraBanco(data) ?? hojeBanco()}
+            estoque={saldosGado}
+            nomeEstoque={nomeEstoque}
+            erros={erros}
+            aoPuxarPesagem={(x) => {
+              if (x.data) setData(x.data);
+              if (x.pessoaId && !pessoaId) setPessoaId(x.pessoaId);
+            }}
           />
-          <Campo rotulo={`Peso bruto total (kg)${formaPreco === 'cabeca' ? '' : ' *'}`} value={peso} onChangeText={setPeso} keyboardType="decimal-pad" erro={erros.peso} />
-          {formaPreco !== 'cabeca' && (
-            <>
-              <Escolha
-                rotulo="Desconto de barriga"
-                opcoes={[
-                  { valor: 'nao', rotulo: 'Sem desconto' },
-                  { valor: 'perc', rotulo: '% do peso' },
-                  { valor: 'kg_cab', rotulo: 'kg por cabeça' },
-                ]}
-                valor={barrigaTipo}
-                aoMudar={setBarrigaTipo}
-              />
-              {barrigaTipo[0] !== 'nao' && (
-                <Campo
-                  rotulo={barrigaTipo[0] === 'perc' ? 'Desconto de barriga (% do peso bruto)' : 'Desconto de barriga (kg por cabeça)'}
-                  value={barrigaValor}
-                  onChangeText={setBarrigaValor}
-                  keyboardType="decimal-pad"
-                  erro={erros.barriga}
-                  ajuda={calc.barrigaKg > 0 ? `Desconta ${formatarNumero(calc.barrigaKg, 2)} kg: peso para a conta ${formatarNumero(calc.pesoLiquido, 2)} kg.` : undefined}
-                />
-              )}
-            </>
-          )}
-          {formaPreco === 'arroba' && (
-            <Campo
-              rotulo="Kg da arroba *"
-              value={kgArroba}
-              onChangeText={setKgArroba}
-              keyboardType="decimal-pad"
-              erro={erros.kgArroba}
-              ajuda={
-                (n(kgArroba) ?? 0) > 0
-                  ? `Arroba de 15 kg de carcaça com ${formatarNumero((15 / n(kgArroba)!) * 100, 2)}% de rendimento. 30 kg = boi em pé a 50%; acima de 30 (ex.: 31,45) já desconta barriga.`
-                  : '30 kg = boi em pé a 50% de rendimento.'
-              }
-            />
-          )}
-          <CampoMoeda rotulo={`Preço (R$ por ${nomePreco}) *`} valor={preco} aoMudar={setPreco} erro={erros.preco} />
-          {cab > 0 && calc.valor > 0 && (
+          {cab > 0 && valorGado > 0 && (
             <View style={estilos.calculo}>
-              <Text style={estilos.calcTitulo}>Conta da venda</Text>
-              {formaPreco !== 'cabeca' && (
+              <Text style={estilos.calcTitulo}>Totais da venda</Text>
+              <Text style={estilos.calcLinha}>
+                {formatarNumero(cab)} cab.{pesoGado > 0 ? ` · ${formatarNumero(pesoGado, 1)} kg brutos (média ${formatarNumero(pesoGado / cab, 2)} kg)` : ''}
+                {arrobasGado > 0 ? ` · ${formatarNumero(arrobasGado, 2)} @ (média ${formatarNumero(arrobasGado / cab, 2)} @)` : ''}
+              </Text>
+              <Text style={estilos.calcLinha}>
+                Preço médio por cabeça {formatarMoeda(valorGado / cab)} · <Text style={{ fontWeight: '800' }}>Total {formatarMoeda(valorGado)}</Text>
+              </Text>
+              {(n(funValor) ?? 0) > 0 && (
                 <Text style={estilos.calcLinha}>
-                  {formatarNumero(n(peso) ?? 0, 2)} kg brutos
-                  {calc.barrigaKg > 0 ? ` − ${formatarNumero(calc.barrigaKg, 2)} kg de barriga = ${formatarNumero(calc.pesoLiquido, 2)} kg` : ''}
-                  {formaPreco === 'arroba' ? ` ÷ ${formatarNumero(n(kgArroba) ?? 0, 2)} kg = ${formatarNumero(calc.arrobas, 2)} @` : ''}
+                  Funrural/Senar (−) {formatarMoeda(n(funValor) ?? 0)} · Líquido {formatarMoeda(liquido)}
                 </Text>
               )}
-              <Text style={estilos.calcLinha}>
-                {formaPreco === 'arroba' ? `${formatarNumero(calc.arrobas, 2)} @` : formaPreco === 'kg' ? `${formatarNumero(calc.pesoLiquido, 2)} kg` : `${formatarNumero(cab)} cab.`} × {formatarMoeda(n(preco) ?? 0)} ={' '}
-                <Text style={{ fontWeight: '800' }}>{formatarMoeda(calc.valor)}</Text>
-              </Text>
-              <Text style={estilos.nota}>
-                Por cabeça: {formatarMoeda(calc.valor / cab)}
-                {(n(peso) ?? 0) > 0 ? ` · ${formatarNumero((n(peso) ?? 0) / cab, 1)} kg brutos` : ''}
-                {calc.arrobas > 0 ? ` · ${formatarNumero(calc.arrobas / cab, 2)} @` : ''}
-                {formaPreco !== 'arroba' && calc.arrobas > 0 ? ` · equivale a ${formatarMoeda(calc.valor / calc.arrobas)} por @ de ${formatarNumero(n(kgArroba) || 30, 2)} kg` : ''}
-              </Text>
             </View>
           )}
+          <Interruptor
+            rotulo="O gado fica na fazenda"
+            descricao={gadoFica ? 'Sai do nosso estoque e entra no estoque de terceiros do comprador (parceria), na fazenda.' : 'Marque se o comprador deixa o gado aqui, em parceria.'}
+            valor={gadoFica}
+            aoMudar={setGadoFica}
+          />
+          {erros.gadoFica ? <Text style={estilos.erro}>{erros.gadoFica}</Text> : null}
         </>
       ) : deCafe ? (
         <>
@@ -782,7 +777,7 @@ export default function VendaForm() {
               </View>
               <Escolha
                 opcoes={[
-                  { valor: 'outro', rotulo: 'Serviço / outro' },
+                  { valor: 'outro', rotulo: 'Produto da fazenda / serviço' },
                   { valor: 'insumo', rotulo: 'Produto do estoque' },
                 ]}
                 valor={[it.tipo]}
@@ -796,13 +791,37 @@ export default function VendaForm() {
                       <Campo rotulo={`Qtde. (${it.unidade}) *`} value={it.qtd} onChangeText={(t) => mudarQtdOuUnit(it, 'qtd', t)} keyboardType="decimal-pad" erro={erros[`q${k}`]} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <CampoMoeda rotulo="R$ unitário" valor={it.unit} aoMudar={(t) => mudarQtdOuUnit(it, 'unit', t)} />
+                      <CampoMoeda rotulo="Valor de venda unitário" valor={it.unit} aoMudar={(t) => mudarQtdOuUnit(it, 'unit', t)} />
                     </View>
                   </View>
-                  <Text style={estilos.nota}>Sai do estoque ao gravar.</Text>
+                  {it.insumoId && (
+                    <Text style={estilos.nota}>
+                      {it.custo != null
+                        ? (() => {
+                            const q = n(it.qtd) ?? 0;
+                            const ct = r2v(q * it.custo);
+                            const vt = n(it.total) ?? 0;
+                            return `Custo médio do estoque: ${formatarMoeda(it.custo)} por ${it.unidade}${q ? ` · custo ${formatarMoeda(ct)} · margem ${formatarMoeda(vt - ct)}` : ''}`;
+                          })()
+                        : 'Produto sem custo de entrada no estoque desta fazenda: sai sem custo.'}
+                    </Text>
+                  )}
+                  <Text style={estilos.nota}>Sai do estoque ao gravar, pelo custo médio (vai para Custo dos Materiais Vendidos); o valor de venda vai para a Receita e o Contas a receber (ou o caixa, se à vista).</Text>
                 </>
               ) : (
-                <Campo rotulo="Descrição *" value={it.descricao} onChangeText={(t) => mudar(it.chave, { descricao: t })} autoCapitalize="sentences" placeholder="Ex.: Sucata, serviço de trator, esterco" erro={erros[`p${k}`]} />
+                <>
+                  <Campo rotulo="O que vendeu *" value={it.descricao} onChangeText={(t) => mudar(it.chave, { descricao: t })} autoCapitalize="sentences" placeholder="Ex.: Mamão formosa, banana prata, milho em grão, serviço de trator" erro={erros[`p${k}`]} />
+                  {/* V160: produto da fazenda com quantidade e unidade (vão para a nota fiscal) */}
+                  <Escolha rotulo="Unidade" opcoes={UNIDADES_OUTRO} valor={[it.unidade]} aoMudar={(v) => mudar(it.chave, { unidade: v[0] ?? 'un' })} />
+                  <View style={estilos.linha}>
+                    <View style={{ flex: 1 }}>
+                      <Campo rotulo={`Qtde. (${it.unidade})`} value={it.qtd} onChangeText={(t) => mudarQtdOuUnit(it, 'qtd', t)} keyboardType="decimal-pad" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <CampoMoeda rotulo="Valor unitário" valor={it.unit} aoMudar={(t) => mudarQtdOuUnit(it, 'unit', t)} />
+                    </View>
+                  </View>
+                </>
               )}
               <CampoMoeda rotulo="Valor (R$) *" valor={it.total} aoMudar={(t) => mudar(it.chave, { total: t })} erro={erros[`t${k}`]} />
             </View>
@@ -902,40 +921,66 @@ export default function VendaForm() {
         rotulo="Forma"
         opcoes={[
           { valor: 'avista', rotulo: 'À vista' },
-          { valor: 'prazo', rotulo: 'A prazo / parcelado' },
+          { valor: 'dias', rotulo: 'Prazo em dias' },
+          { valor: 'data', rotulo: 'Data certa' },
         ]}
         valor={pagto}
         aoMudar={setPagto}
       />
-      {pagto[0] === 'prazo' && (
-        <View style={estilos.linha}>
-          <View style={{ width: 80 }}>
-            <Campo rotulo="Parcelas" value={nParc} onChangeText={(t) => setNParc(t.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" />
+      {pagto[0] !== 'avista' && (
+        <>
+          <View style={[estilos.linha, { flexWrap: 'wrap' }]}>
+            <View style={{ width: 80 }}>
+              <Campo rotulo="Parcelas" value={nParc} onChangeText={(t) => setNParc(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
+            </View>
+            {pagto[0] === 'dias' && (
+              <View style={{ width: 100 }}>
+                <Campo rotulo="1ª em (dias)" value={prazo1} onChangeText={(t) => setPrazo1(t.replace(/\D/g, '').slice(0, 4))} keyboardType="number-pad" />
+              </View>
+            )}
+            <CampoQtdeIntermediarias valor={nInterm} aoMudar={setNInterm} />
+            {Number(nParc) > 1 && (
+              <View style={{ width: 110 }}>
+                <Campo rotulo="Demais a cada (dias)" value={intervalo} onChangeText={(t) => setIntervalo(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
+              </View>
+            )}
           </View>
-          <View style={{ flex: 1 }}>
-            <CampoData rotulo="1º vencimento" valor={primeiro} aoMudar={setPrimeiro} />
-          </View>
-          <View style={{ width: 90 }}>
-            <Campo rotulo="A cada (dias)" value={intervalo} onChangeText={(t) => setIntervalo(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
-          </View>
-        </View>
+          {pagto[0] === 'data' && <CampoData rotulo="Data do 1º vencimento *" valor={primeiro} aoMudar={setPrimeiro} />}
+        </>
       )}
-      {parcelas.map((x, k) => (
-        <View key={x.chave} style={estilos.linha}>
-          <Text style={estilos.parcNum}>{k + 1}ª</Text>
-          <View style={{ flex: 1 }}>
-            <CampoData rotulo="Vencimento" valor={x.venc} aoMudar={(t) => setParcelas((l) => l.map((y) => (y.chave === x.chave ? { ...y, venc: t } : y)))} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <CampoMoeda rotulo="Valor" valor={x.valor} aoMudar={(t) => setParcelas((l) => l.map((y) => (y.chave === x.chave ? { ...y, valor: t } : y)))} />
-          </View>
-        </View>
-      ))}
-      {parcelas.length > 1 && <Text style={[estilos.soma, Math.abs(somaParcelas - liquido) > 0.009 && { color: cores.erro }]}>Parcelas somam {formatarMoeda(somaParcelas)}</Text>}
-      {erros.parcelas && <Text style={estilos.erro}>{erros.parcelas}</Text>}
-      <Text style={estilos.nota}>O recebimento é confirmado em Financeiro › Contas a receber › Receber, quando o dinheiro entrar.</Text>
+      <ParcelasIntermediarias
+        normais={parcelas}
+        setNormais={setParcelas}
+        interm={pagto[0] !== 'avista' ? interm : []}
+        setInterm={setInterm}
+        fixo={fixo}
+        setFixo={setFixo}
+        total={liquido}
+        rotuloTotal="o valor a receber"
+        erro={erros.parcelas}
+        mostrarUma
+      />
+      <Text style={estilos.nota}>Mesmo à vista, a venda vai para o Contas a receber: o recebimento é confirmado em Financeiro › Contas a receber › Receber, quando o dinheiro entrar.</Text>
 
       <Campo rotulo="Observações" value={obs} onChangeText={setObs} multiline style={{ minHeight: 72, paddingTop: 12, textAlignVertical: 'top' }} />
+      {deAnimais && (
+        <>
+          {/* V159: venda de gado não fecha sem a GTA (ela vai junto para a nota fiscal) */}
+          <Secao titulo="GTA (Guia de Trânsito Animal)" />
+          <View style={estilos.linha}>
+            <View style={{ flex: 2 }}>
+              <Campo rotulo="Número da GTA" value={gtaNum} onChangeText={(t) => setGtaNum(t.replace(/[^0-9A-Za-z-]/g, '').slice(0, 20))} autoCapitalize="characters" erro={erros.gta} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Campo rotulo="Série" value={gtaSerie} onChangeText={(t) => setGtaSerie(t.toUpperCase().slice(0, 5))} autoCapitalize="characters" />
+            </View>
+            <View style={{ width: 70 }}>
+              <Campo rotulo="UF" value={gtaUf} onChangeText={(t) => setGtaUf(t.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2))} autoCapitalize="characters" />
+            </View>
+          </View>
+          <Text style={estilos.nota}>A GTA é obrigatória para transportar o gado. Tire no sistema do órgão de defesa sanitária (no ES, o IDAF) e informe o número aqui, ou depois, na consulta da venda. Ela vai sozinha para a nota fiscal.</Text>
+        </>
+      )}
       <Botao titulo="Gravar venda" onPress={salvar} carregando={salvando} />
     </Tela>
   );

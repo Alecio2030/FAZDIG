@@ -9,6 +9,8 @@ export type ItemNota = {
   quantidade: number | null;
   valor_unitario: number | null;
   valor_total: number | null;
+  /** V172: desconto da linha (R$) */
+  desconto?: number | null;
   lote: string | null;
   validade: string | null; // aaaa-mm-dd
   /** impostos destacados no item */
@@ -131,6 +133,7 @@ export function lerXmlNfe(xml: string): LeituraNota | null {
       quantidade: num(tag(prod, 'qCom')),
       valor_unitario: num(tag(prod, 'vUnCom')),
       valor_total: num(tag(prod, 'vProd')),
+      desconto: num(tag(prod, 'vDesc')),
       lote: (rastro && tag(rastro, 'nLote')) || loteAdic,
       validade: soData(rastro ? tag(rastro, 'dVal') : null) ?? (valAdic ? `${valAdic[3].length === 2 ? '20' + valAdic[3] : valAdic[3]}-${valAdic[2]}-${valAdic[1]}` : null),
       valor_icms: num(tag(icmsBloco, 'vICMS')),

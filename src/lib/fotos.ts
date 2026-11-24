@@ -35,6 +35,12 @@ export async function escolherImagem(camera: boolean, opcoes: Opcoes = {}): Prom
   return { foto: { uri: a.uri, base64: a.base64, mimeType: a.mimeType ?? 'image/jpeg' } };
 }
 
+/** V167: reduz uma imagem escolhida de arquivo (no navegador), igual à da câmera. Null fora do navegador ou se falhar. */
+export async function reduzirImagemArquivo(uri: string, lado = 2000): Promise<Foto | null> {
+  if (Platform.OS !== 'web') return null;
+  return reduzirNoNavegador(uri, lado, 0.7);
+}
+
 /** Desenha a imagem num quadro menor e devolve em JPEG. Null se o navegador não conseguir. */
 async function reduzirNoNavegador(uri: string, lado: number, qualidade: number): Promise<Foto | null> {
   try {

@@ -31,10 +31,14 @@ import {
   type Aptidao,
   type Item,
 } from '../../lib/dietas';
+import { formular } from '../../lib/formulacao';
+import { carregarParametros, valorParam } from '../../lib/parametros';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
-type ItemForm = Item & { kgTexto: string };
+// V175: o operador escolhe os insumos; o sistema faz o formulado (% de cada um na matéria seca)
+// e a dieta sai dele (consumo de MS por cabeça x % de cada insumo).
+type ItemForm = Item & { pctTexto: string };
 const ESCORES = ['1', '2', '3', '4', '5'].map((v) => ({ valor: v, rotulo: v }));
 const n = (t: string) => lerNumero(t);
 let contador = 0;
@@ -70,6 +74,15 @@ export default function DietaForm() {
   const [metasEditadas, setMetasEditadas] = useState(false);
   const [itens, setItens] = useState<ItemForm[]>([]);
   const [obs, setObs] = useState('');
+  // V175: tratos por dia e fornecimento automático (o trato de cada dia baixa o estoque para o lote)
+  const [tratos, setTratos] = useState('');
+  const [auto, setAuto] = useState<string[]>([]);
+  const [desde, setDesde] = useState('');
+  const [avisoForm, setAvisoForm] = useState<{ tipo: 'info' | 'erro'; texto: string } | null>(null);
+  const [semEstoque, setSemEstoque] = useState<Record<string, boolean>>({});
+  const [paramsOk, setParamsOk] = useState(false);
+  /** o técnico mudou algum %: o sistema não reformula sozinho */
+  const [ajustado, setAjustado] = useState(false);
 
   const [alterarAberto, setAlterarAberto] = useState(false);
   const [alterarNum, setAlterarNum] = useState('');
@@ -81,6 +94,13 @@ export default function DietaForm() {
   const [erros, setErros] = useState<Record<string, string>>({});
 
   const apt = (aptidao[0] ?? 'corte') as Aptidao;
+  // V175: valores usuais dos Parâmetros (consumo de MS, GMD, tratos por dia, mineral)
+  useEffect(() => {
+    carregarParametros().then(() => setParamsOk(true));
+  }, []);
+  const cmsPad = (a: Aptidao) => (paramsOk ? valorParam(a === 'corte' ? 'cms_pv_corte' : 'cms_pv_outros') : null) ?? cmsPercPadrao(a);
+  const tratosPad = (paramsOk ? valorParam('tratos_dia') : null) ?? 3;
+  const tratosN = Math.max(1, Math.round(n(tratos) ?? tratosPad));
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: id ? (numero ? `Dieta nº ${numero}` : 'Dieta') : 'Dietas' });
@@ -123,6 +143,9 @@ export default function DietaForm() {
         setMetaFdn(numeroParaCampo(d.meta_fdn_min));
         setMetasEditadas(true);
         setObs(d.observacoes ?? '');
+        setTratos(d.tratos_dia != null ? String(d.tratos_dia) : '');
+        setAuto(d.fornecimento_auto ? ['sim'] : []);
+        setDesde(d.fornecer_desde ? doBanco(d.fornecer_desde) : '');
         const its = ((d.itens as any[]) ?? []).sort((a, b) => a.ordem - b.ordem);
         setItens(
           its.map((i) => ({
@@ -131,7 +154,7 @@ export default function DietaForm() {
             nome: i.nome,
             tipo: i.tipo,
             kg_mn: Number(i.kg_mn),
-            kgTexto: numeroParaCampo(i.kg_mn),
+            pctTexto: '',
             ms: Number(i.ms),
             pb: Number(i.pb),
             ndt: Number(i.ndt),
@@ -139,6 +162,15 @@ export default function DietaForm() {
             preco_kg_mn: i.preco_kg_mn != null ? Number(i.preco_kg_mn) : null,
           })),
         );
+        // % de cada insumo na MS, a partir dos kg gravados
+        const msTot = its.reduce((t, i) => t + (Number(i.kg_mn) * Number(i.ms)) / 100, 0);
+        setItens((v) => v.map((x) => ({ ...x, pctTexto: msTot > 0 ? numeroParaCampo(Math.round(((x.kg_mn * x.ms) / 100 / msTot) * 10000) / 100) : '' })));
+        setAjustado(true);
+        const ids = its.map((i) => i.alimento_id).filter(Boolean);
+        if (ids.length) {
+          const { data: al } = await supabase.from('alimentos').select('id, insumo_id').in('id', ids);
+          setSemEstoque(Object.fromEntries(((al as any[]) ?? []).map((x) => [x.id, !x.insumo_id])));
+        }
       } catch (e) {
         setErro(traduzirErro(e));
       }
@@ -156,9 +188,15 @@ export default function DietaForm() {
   }, [metasEditadas, metasRef.pb, metasRef.ndt, metasRef.fdnMin]);
 
   const usaPerc = !(apt === 'leite' && (n(leite) ?? 0) > 0);
-  const cms = cmsEstimado({ aptidao: apt, pv: n(pv), leite: n(leite), gordura: n(gordura), del: n(del), percPv: n(cmsPerc) ?? cmsPercPadrao(apt) });
+  const cms = cmsEstimado({ aptidao: apt, pv: n(pv), leite: n(leite), gordura: n(gordura), del: n(del), percPv: n(cmsPerc) ?? cmsPad(apt) });
   const metas = { pb: n(metaPb) ?? metasRef.pb, ndt: n(metaNdt) ?? metasRef.ndt, fdnMin: n(metaFdn) ?? metasRef.fdnMin };
-  const itensCalc: Item[] = useMemo(() => itens.map((i) => ({ ...i, kg_mn: n(i.kgTexto) ?? 0 })), [itens]);
+  // kg por cabeça de cada insumo = consumo de MS × % na MS ÷ MS do insumo
+  const itensCalc: Item[] = useMemo(
+    () => itens.map((i) => ({ ...i, kg_mn: cms && i.ms > 0 ? Math.round((((n(i.pctTexto) ?? 0) / 100) * cms * 100) / i.ms * 1000) / 1000 : 0 })),
+    [itens, cms],
+  );
+  const somaPct = itens.reduce((t, i) => t + (n(i.pctTexto) ?? 0), 0);
+  const mnTotal = itensCalc.reduce((t, i) => t + i.kg_mn, 0);
 
   // ---- listas ----
   const carregarLotes = useCallback(async (): Promise<ItemLista[]> => {
@@ -195,6 +233,13 @@ export default function DietaForm() {
     if (!aid) return;
     const { data: a, error } = await supabase.from('alimentos').select('*').eq('id', aid).single();
     if (error || !a) return setErro(traduzirErro(error));
+    // V175: alimento ligado a um produto do estoque usa o custo médio de lá
+    let preco = a.preco_kg_mn != null ? Number(a.preco_kg_mn) : null;
+    if (a.insumo_id && fid) {
+      const { data: pe } = await supabase.rpc('preco_kg_alimento', { p_alimento: a.id, p_fazenda: fid });
+      if (pe != null && Number(pe) > 0) preco = Number(pe);
+    }
+    setSemEstoque((x) => ({ ...x, [a.id]: !a.insumo_id }));
     setItens((v) => [
       ...v,
       {
@@ -203,17 +248,50 @@ export default function DietaForm() {
         nome: a.nome,
         tipo: a.tipo,
         kg_mn: 0,
-        kgTexto: '',
+        pctTexto: '',
         ms: Number(a.ms),
         pb: Number(a.pb),
         ndt: Number(a.ndt),
         fdn: Number(a.fdn),
-        preco_kg_mn: a.preco_kg_mn != null ? Number(a.preco_kg_mn) : null,
+        preco_kg_mn: preco,
       },
     ]);
   }
 
-  const mudarKg = (chave: string, t: string) => setItens((v) => v.map((i) => (i.chave === chave ? { ...i, kgTexto: t } : i)));
+  // ---- V175: formulado pelo menor custo ----
+  const chavesItens = itens.map((i) => i.chave).join(',');
+  function formularDieta(avisar = true) {
+    if (!itens.length) return avisar && setAvisoForm({ tipo: 'erro', texto: 'Escolha os insumos que quer usar.' });
+    if (!cms) return avisar && setAvisoForm({ tipo: 'erro', texto: 'Informe o peso vivo médio para calcular o consumo de matéria seca.' });
+    const r = formular(itensCalc.map((i) => ({ ...i, kg_mn: 0 })), cms, metas, (valorParam('mineral_g_cab') ?? 100) / 1000);
+    if (r.erro) return setAvisoForm({ tipo: 'erro', texto: r.erro });
+    setItens((v) => v.map((i, k) => ({ ...i, pctTexto: numeroParaCampo(Math.round(((r.kgMn[k] * i.ms) / 100 / cms) * 10000) / 100) })));
+    setAjustado(false);
+    const partes = ['Formulado pelo menor custo para atingir as metas do ganho desejado.'];
+    if (r.faltou.length) partes.push(`Com estes insumos não deu para chegar em: ${r.faltou.join('; ')}. Acrescente um insumo mais forte nesse ponto.`);
+    if (r.semPreco.length) partes.push(`Sem preço (entraram como caros): ${r.semPreco.join(', ')}.`);
+    if (r.suspeitos.length) partes.push(`Confira o cadastro (Pecuário › Alimentos), os valores não parecem certos: ${r.suspeitos.join(' | ')}.`);
+    const cmsP = usaPerc ? n(cmsPerc) ?? cmsPad(apt) : null;
+    if (apt === 'corte' && cmsP != null && (cmsP < 1.8 || cmsP > 3)) partes.push(`Consumo de ${formatarNumero(cmsP, 2)}% do peso vivo está fora do usual para corte (2,2 a 2,6%).`);
+    setAvisoForm({ tipo: r.faltou.length || r.suspeitos.length ? 'erro' : 'info', texto: partes.join(' ') });
+  }
+  // reformula sozinho quando muda a lista de insumos, o consumo ou as metas (até o técnico mexer num %)
+  useEffect(() => {
+    if (ajustado || carregando || !itens.length || !cms) return;
+    formularDieta(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chavesItens, cms, metas.pb, metas.ndt, metas.fdnMin, ajustado, carregando]);
+  // GMD em branco no corte: o usual dos Parâmetros
+  useEffect(() => {
+    if (id || !paramsOk || apt !== 'corte' || gmd.trim()) return;
+    setGmd(numeroParaCampo(valorParam('gmd_confinamento') ?? 1.4));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramsOk, apt, id]);
+
+  const mudarPct = (chave: string, t: string) => {
+    setAjustado(true);
+    setItens((v) => v.map((i) => (i.chave === chave ? { ...i, pctTexto: t } : i)));
+  };
   const tirarItem = (chave: string) => setItens((v) => v.filter((i) => i.chave !== chave));
 
   async function abrirParaAlterar() {
@@ -242,8 +320,12 @@ export default function DietaForm() {
     }
     if (apt === 'genetica' && !genTipo[0]) e.genTipo = 'Escolha: Receptoras, Doadoras ou Touros.';
     if (usaPerc && cmsPerc.trim() && (n(cmsPerc) == null || (n(cmsPerc) ?? 0) <= 0)) e.cmsPerc = 'Valor inválido.';
+    if (auto.length && !loteId) e.auto = 'Para o trato sair sozinho todo dia, escolha o lote.';
+    if (auto.length && desde.trim() && !dataValida(desde)) e.desde = 'Data inválida.';
     if (itens.length === 0) e.itens = 'Adicione pelo menos um alimento.';
-    else if (itens.some((i) => n(i.kgTexto) == null || (n(i.kgTexto) ?? 0) <= 0)) e.itens = 'Informe os kg de cada alimento (ou tire o que não vai usar).';
+    else if (!cms) e.pv = 'Informe o peso vivo médio para calcular a dieta.';
+    else if (itens.some((i) => n(i.pctTexto) == null || (n(i.pctTexto) ?? 0) < 0)) e.itens = 'Confira o % de cada insumo no formulado.';
+    else if (Math.abs(somaPct - 100) > 0.5) e.itens = `O formulado soma ${formatarNumero(somaPct, 2)}%: precisa fechar 100%.`;
     setErros(e);
     const lista = Object.values(e);
     if (lista.length) return setErro(lista.length === 1 ? lista[0] : `Falta corrigir:\n• ${lista.join('\n• ')}`);
@@ -264,13 +346,16 @@ export default function DietaForm() {
       gordura: apt === 'leite' ? n(gordura) : null,
       del: apt === 'leite' && del.trim() ? Number(del) : null,
       genetica_tipo: apt === 'genetica' ? genTipo[0] : null,
-      cms_perc_pv: usaPerc ? n(cmsPerc) ?? cmsPercPadrao(apt) : null,
+      cms_perc_pv: usaPerc ? n(cmsPerc) ?? cmsPad(apt) : null,
       cms_kg: cms != null ? Math.round(cms * 1000) / 1000 : null,
       meta_pb: metas.pb,
       meta_ndt: metas.ndt,
       meta_fdn_min: metas.fdnMin,
       observacoes: obs.trim(),
-      itens: itensCalc.map((i) => ({ alimento_id: i.alimento_id, nome: i.nome, tipo: i.tipo, kg_mn: i.kg_mn, ms: i.ms, pb: i.pb, ndt: i.ndt, fdn: i.fdn, preco_kg_mn: i.preco_kg_mn })),
+      tratos_dia: tratosN,
+      fornecimento_auto: auto.length > 0 && !!loteId,
+      fornecer_desde: auto.length > 0 && loteId ? paraBanco(desde && dataValida(desde) ? desde : data) : null,
+      itens: itensCalc.filter((i) => i.kg_mn > 0).map((i) => ({ alimento_id: i.alimento_id, nome: i.nome, tipo: i.tipo, kg_mn: i.kg_mn, ms: i.ms, pb: i.pb, ndt: i.ndt, fdn: i.fdn, preco_kg_mn: i.preco_kg_mn })),
     };
 
     setSalvando(true);
@@ -367,7 +452,7 @@ export default function DietaForm() {
       </View>
       <Escolha rotulo="Escore de Condição Corporal" opcoes={ESCORES} valor={ecc} aoMudar={(v) => setEcc(ecc[0] === v[0] ? [] : v)} />
 
-      {apt === 'corte' && <Campo rotulo="Meta de ganho (GMD, kg/dia)" value={gmd} onChangeText={setGmd} keyboardType="decimal-pad" placeholder="Ex.: 1,2" erro={erros.gmd} />}
+      {apt === 'corte' && <Campo rotulo="Ganho de peso desejado (GMD, kg/dia)" value={gmd} onChangeText={setGmd} keyboardType="decimal-pad" placeholder={`Ex.: ${numeroParaCampo((paramsOk ? valorParam('gmd_confinamento') : null) ?? 1.4)}`} erro={erros.gmd} />}
       {apt === 'leite' && (
         <>
           <View style={estilos.linha}>
@@ -391,7 +476,7 @@ export default function DietaForm() {
           value={cmsPerc}
           onChangeText={setCmsPerc}
           keyboardType="decimal-pad"
-          placeholder={numeroParaCampo(cmsPercPadrao(apt))}
+          placeholder={numeroParaCampo(cmsPad(apt))}
           ajuda={cms != null ? `Consumo estimado: ${formatarNumero(cms, 2)} kg de MS/cab/dia` : 'Informe o peso vivo para estimar.'}
           erro={erros.cmsPerc}
         />
@@ -418,37 +503,22 @@ export default function DietaForm() {
         </Text>
       )}
 
-      {/* ----- 2. a mistura ----- */}
-      <Secao titulo="Alimentos da dieta (por cabeça/dia)" />
-      {itens.map((i) => {
-        const kg = n(i.kgTexto) ?? 0;
-        return (
-          <View key={i.chave} style={estilos.item}>
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-              <View style={{ flex: 1 }}>
-                <Text style={estilos.itemNome}>{i.nome}</Text>
-                <Text style={estilos.itemComp}>{textoComposicao(i)}</Text>
-              </View>
-              <Pressable onPress={() => tirarItem(i.chave)} hitSlop={10} accessibilityRole="button" accessibilityLabel={`Tirar ${i.nome}`}>
-                <Ionicons name="close-circle" size={26} color={cores.textoSuave} />
-              </Pressable>
-            </View>
-            <View style={estilos.linha}>
-              <View style={{ width: 130 }}>
-                <Campo rotulo="kg no cocho" value={i.kgTexto} onChangeText={(t) => mudarKg(i.chave, t)} keyboardType="decimal-pad" placeholder="kg MN" />
-              </View>
-              <View style={{ flex: 1, paddingTop: 30, gap: 2 }}>
-                <Text style={estilos.itemCalc}>{formatarNumero((kg * i.ms) / 100, 2)} kg de MS</Text>
-                <Text style={estilos.itemCalc}>
-                  {i.preco_kg_mn != null ? `${formatarMoeda(kg * i.preco_kg_mn)}/cab/dia` : 'sem preço cadastrado'}
-                </Text>
-              </View>
-            </View>
+      {/* ----- 2. os insumos ----- */}
+      <Secao titulo="Insumos que quer usar" />
+      {itens.map((i) => (
+        <View key={i.chave} style={[estilos.item, { flexDirection: 'row', alignItems: 'flex-start', gap: 8 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={estilos.itemNome}>{i.nome}</Text>
+            <Text style={estilos.itemComp}>{textoComposicao(i)}</Text>
+            <Text style={estilos.itemComp}>{i.preco_kg_mn != null ? `${formatarMoeda(i.preco_kg_mn)}/kg` : 'sem preço'}</Text>
           </View>
-        );
-      })}
+          <Pressable onPress={() => tirarItem(i.chave)} hitSlop={10} accessibilityRole="button" accessibilityLabel={`Tirar ${i.nome}`}>
+            <Ionicons name="close-circle" size={26} color={cores.textoSuave} />
+          </Pressable>
+        </View>
+      ))}
       <SeletorLista
-        rotulo={itens.length ? 'Adicionar outro alimento' : 'Adicionar alimento'}
+        rotulo={itens.length ? 'Adicionar outro insumo' : 'Adicionar insumo'}
         valorId={null}
         aoMudar={adicionarAlimento}
         carregar={carregarAlimentos}
@@ -457,8 +527,110 @@ export default function DietaForm() {
         vazio="Nenhum alimento cadastrado. Cadastre em Pecuário › Alimentos."
       />
       <Text style={estilos.link} onPress={() => navegacao.push('AlimentoForm', {})}>
-        Alimento não está na lista? Cadastrar alimento
+        Insumo não está na lista? Cadastrar alimento
       </Text>
+
+      {/* ----- 3. o formulado: % de cada insumo ----- */}
+      {itens.length > 0 && (
+        <>
+          <Secao titulo="Formulado (% de cada insumo)" />
+          {!cms && <Aviso tipo="info" texto="Informe o peso vivo médio: o formulado e a dieta saem do consumo de matéria seca." />}
+          {avisoForm && <Aviso tipo={avisoForm.tipo} texto={avisoForm.texto} />}
+          <View style={estilos.item}>
+            <View style={estilos.tabLinha}>
+              <Text style={[estilos.tabNome, estilos.tabCab]}>Insumo</Text>
+              <Text style={[estilos.tabCol, estilos.tabCab]}>% na MS</Text>
+              <Text style={[estilos.tabCol, estilos.tabCab]}>% como vai no cocho</Text>
+            </View>
+            {itens.map((i, k) => (
+              <View key={i.chave} style={estilos.tabLinha}>
+                <Text style={estilos.tabNome}>{i.nome}</Text>
+                <View style={estilos.tabCol}>
+                  <Campo rotulo="" value={i.pctTexto} onChangeText={(t) => mudarPct(i.chave, t)} keyboardType="decimal-pad" placeholder="%" />
+                </View>
+                <Text style={estilos.tabCol}>{mnTotal > 0 ? `${formatarNumero((itensCalc[k].kg_mn / mnTotal) * 100, 1)}%` : '–'}</Text>
+              </View>
+            ))}
+            <View style={estilos.tabLinha}>
+              <Text style={[estilos.tabNome, estilos.tabCab]}>Total</Text>
+              <Text style={[estilos.tabCol, estilos.tabCab, Math.abs(somaPct - 100) > 0.5 && { color: cores.erro }]}>{formatarNumero(somaPct, 1)}%</Text>
+              <Text style={[estilos.tabCol, estilos.tabCab]}>{mnTotal > 0 ? '100%' : '–'}</Text>
+            </View>
+          </View>
+          {ajustado ? (
+            <Botao titulo="⚙️  Voltar ao formulado pelo menor custo" tipo="secundario" onPress={() => formularDieta()} />
+          ) : (
+            <Text style={estilos.nota}>Formulado pelo sistema. Para seguir a fórmula do técnico, mude o % de qualquer insumo (o total precisa fechar 100%).</Text>
+          )}
+
+          {/* ----- 4. a dieta: o que vai no cocho ----- */}
+          <Secao titulo="Dieta (por cabeça por dia)" />
+          {cms ? (
+            <View style={estilos.item}>
+              <Text style={estilos.itemCalc}>
+                Consumo de matéria seca: {formatarNumero(cms, 2)} kg{usaPerc ? ` (${formatarNumero(n(cmsPerc) ?? cmsPad(apt), 2)}% do peso vivo)` : ''}
+              </Text>
+              {itensCalc.map((i) => (
+                <View key={i.chave} style={estilos.tabLinha}>
+                  <Text style={estilos.tabNome}>{i.nome}</Text>
+                  <Text style={estilos.tabCol}>{formatarNumero(i.kg_mn, 2)} kg</Text>
+                  <Text style={estilos.tabCol}>{i.preco_kg_mn != null ? formatarMoeda(i.kg_mn * i.preco_kg_mn) : '–'}</Text>
+                </View>
+              ))}
+              <View style={estilos.tabLinha}>
+                <Text style={[estilos.tabNome, estilos.tabCab]}>Total no cocho</Text>
+                <Text style={[estilos.tabCol, estilos.tabCab]}>{formatarNumero(mnTotal, 2)} kg</Text>
+                <Text style={[estilos.tabCol, estilos.tabCab]}>{formatarMoeda(itensCalc.reduce((t, i) => t + i.kg_mn * (i.preco_kg_mn ?? 0), 0))}</Text>
+              </View>
+            </View>
+          ) : null}
+        </>
+      )}
+
+      {/* ----- V175: tratos e fornecimento ----- */}
+      <Secao titulo="Tratos e fornecimento" />
+      <Campo rotulo="Tratos por dia" value={tratos} onChangeText={(t) => setTratos(t.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" placeholder={String(tratosPad)} />
+      {itensCalc.some((i) => i.kg_mn > 0) && (
+        <View style={estilos.item}>
+          <Text style={estilos.itemNome}>
+            Cada trato ({tratosN} por dia){cabN ? ` – lote de ${formatarNumero(cabN)} cabeças` : ' – por cabeça'}
+          </Text>
+          {itensCalc
+            .filter((i) => i.kg_mn > 0)
+            .map((i) => (
+              <Text key={i.chave} style={estilos.itemCalc}>
+                {i.nome}: {formatarNumero((i.kg_mn * (cabN || 1)) / tratosN, cabN ? 1 : 2)} kg
+              </Text>
+            ))}
+          <Text style={estilos.nota}>
+            No dia: {formatarNumero(itensCalc.reduce((t, i) => t + i.kg_mn, 0) * (cabN || 1), cabN ? 1 : 2)} kg de matéria natural{cabN ? ' para o lote' : ' por cabeça'}.
+          </Text>
+        </View>
+      )}
+      <Escolha
+        opcoes={[{ valor: 'sim', rotulo: 'Fornecer sozinho todo dia (baixa o estoque para o lote)' }]}
+        valor={auto}
+        aoMudar={setAuto}
+        multiplo
+        erro={erros.auto}
+      />
+      {auto.length > 0 && (
+        <>
+          <CampoData rotulo="A partir de" valor={desde} aoMudar={setDesde} erro={erros.desde} />
+          <Text style={estilos.nota}>
+            Todo dia o sistema lança o trato do lote por esta dieta (cabeças do dia × kg por cabeça) e baixa o estoque pelo custo médio; o custo vai para o centro de custo do lote. Quando o servido for diferente, corrija em Pecuário › Trato do dia. Em branco, começa na data da dieta.
+          </Text>
+          {itens.some((i) => i.alimento_id && semEstoque[i.alimento_id]) && (
+            <Aviso
+              tipo="info"
+              texto={`Sem ligação com o estoque: ${itens
+                .filter((i) => i.alimento_id && semEstoque[i.alimento_id])
+                .map((i) => i.nome)
+                .join(', ')}. Esses entram no trato, mas não baixam o estoque nem vão ao custo. Ligue o alimento ao produto em Pecuário › Alimentos.`}
+            />
+          )}
+        </>
+      )}
 
       {/* ----- 3. balanço, alertas e ficha ----- */}
       <PainelDieta
@@ -470,6 +642,7 @@ export default function DietaForm() {
         gmd={n(gmd)}
         leite={n(leite)}
         cabecas={cabN}
+        tratos={tratosN}
         tituloFicha={`Dieta nº ${id ? numero : proximo ?? ''}${descricao ? ` – ${descricao}` : ''}`}
         data={data}
       />
@@ -494,4 +667,8 @@ const estilos = StyleSheet.create({
   itemNome: { fontSize: tam.texto, fontWeight: '700', color: cores.texto },
   itemComp: { fontSize: tam.pequeno, color: cores.textoSuave },
   itemCalc: { fontSize: tam.pequeno + 1, color: cores.texto },
+  tabLinha: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 2 },
+  tabNome: { flex: 1, fontSize: tam.pequeno + 1, color: cores.texto },
+  tabCol: { width: 96, fontSize: tam.pequeno + 1, color: cores.texto, textAlign: 'right' },
+  tabCab: { fontWeight: '800' },
 });

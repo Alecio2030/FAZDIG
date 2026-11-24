@@ -302,7 +302,7 @@ export default function AnimalForm() {
         if (!a.racaId && l.raca_id) novo.racaId = l.raca_id;
         if (!a.ferroId && l.ferro_id) novo.ferroId = l.ferro_id;
         if (novo.categoria.length === 0 && l.categoria) novo.categoria = [l.categoria];
-        const semNasc = a.nasc.modo === 'exata' ? !a.nasc.data : !a.nasc.meses;
+        const semNasc = a.nasc.modo === 'exata' ? !a.nasc.data : a.nasc.modo === 'faixa' ? !a.nasc.faixa : !a.nasc.meses;
         if (a.controle === 'sem' && semNasc && l.nascimento_ref) novo.nasc = nascimentoDoBanco(l.nascimento_ref, l.nascimento_aproximado, hojeBanco());
       }
       return novo;
@@ -376,7 +376,7 @@ export default function AnimalForm() {
     } else {
       const lido = lerNascimento(f.nasc, hojeBanco());
       if (lido.erro) falha('nasc', 'Idade', lido.erro);
-      else if (!lido.iso) falha('nasc', 'Idade', 'informe a idade em meses ou a data de nascimento');
+      else if (!lido.iso) falha('nasc', 'Idade', 'informe a faixa, a idade em meses ou a data de nascimento');
     }
     if (!numOk(f.peso)) falha('peso', com ? 'Peso atual' : 'Peso', 'número inválido');
     if (com && depPrograma) {
@@ -711,7 +711,7 @@ export default function AnimalForm() {
           <Campo rotulo="Nome" value={f.nome} onChangeText={(t) => muda('nome', t)} autoCapitalize="words" placeholder="Opcional" />
           <Campo rotulo="Brinco" value={f.brinco} onChangeText={(t) => muda('brinco', t)} autoCapitalize="characters" autoCorrect={false} placeholder="Se não tiver, fica pelo número" erro={erros.brinco} />
           <CampoFerro valorId={f.ferroId} aoMudar={(v) => muda('ferroId', v)} />
-          <CampoNascimento rotulo="Idade *" rotuloMeses="Idade hoje, em meses" valor={f.nasc} aoMudar={(v) => muda('nasc', v)} baseIso={hojeBanco()} erro={erros.nasc} />
+          <CampoNascimento rotulo="Idade *" rotuloMeses="Idade hoje, em meses" valor={f.nasc} aoMudar={(v) => muda('nasc', v)} baseIso={hojeBanco()} erro={erros.nasc} sexo={f.sexo[0] === 'M' || f.sexo[0] === 'F' ? f.sexo[0] : null} />
           {blocoSexo}
           <CampoRaca valorId={f.racaId} aoMudar={(v) => muda('racaId', v)} />
           <Campo rotulo="Grau de sangue" value={f.grau} onChangeText={(t) => muda('grau', t)} placeholder="Ex.: 1/2 Gir, 3/4 Holandês" />

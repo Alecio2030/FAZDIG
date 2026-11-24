@@ -17,7 +17,7 @@ const vinculo = (c: Centro) => (c.conta_plano_id ? 'Conta de grau 3 do Plano de 
 
 /**
  * V144: consultar os centros de custo (contas de grau 3 do grupo 4 e as divisões delas)
- * pelo nome ou pelo começo do código ("4.1" mostra a 3 Irmãos inteira, "4.1.01" o Agrícola dela).
+ * pelo nome ou pelo começo do código ("4.01" mostra a 3 Irmãos inteira, "4.01.01" o Agrícola dela).
  */
 export default function ConsultaCentros() {
   const navegacao = useNavigation<NavPilha>();
@@ -47,14 +47,14 @@ export default function ConsultaCentros() {
   return (
     <>
       {centros && centros.length > 0 && <Resumo esquerda={`${centros.filter((c) => c.ativo).length} centros ativos`} />}
-      <Busca valor={busca} aoMudar={setBusca} dica="Nome, fazenda ou código (ex.: 4.1.01)" />
+      <Busca valor={busca} aoMudar={setBusca} dica="Nome, fazenda ou código (ex.: 4.01.01)" />
       <ResultadoBusca
         termo={termo}
         achados={achados}
         buscando={centros === null}
         erro={erro}
         maximo={MAXIMO}
-        dica="Digite parte do nome ou o começo do código: 4.1 mostra a primeira fazenda inteira, 4.1.01 o Agrícola dela com os talhões. Tocando no centro, abre."
+        dica="Digite parte do nome ou o começo do código: 4.01 mostra a primeira fazenda inteira, 4.01.01 o Agrícola dela com os talhões e as contas. Tocando no centro, abre."
         refinar="do nome ou do código"
         item={(c: Centro) => (
           <Linha

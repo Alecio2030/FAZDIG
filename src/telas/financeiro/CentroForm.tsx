@@ -31,8 +31,8 @@ const OPCOES_VINCULO = [
 
 /**
  * V144: os centros de custo são as contas de GRAU 3 do grupo 4 do Plano de contas (o sistema cria sozinho).
- * Aqui: (1) digitar o código da conta (ex.: 4.1.01) traz o nome do plano e confere/cria o centro;
- * (2) escolher um centro e criar uma divisão dele (ex.: Viveiro, dentro do 4.1.01).
+ * Aqui: (1) digitar o código da conta (ex.: 4.01.01) traz o nome do plano e confere/cria o centro;
+ * (2) escolher um centro e criar uma divisão dele (ex.: Viveiro, dentro do 4.01.01).
  * Talhões, mangas e lotes já ganham a sua divisão sozinhos.
  */
 export default function CentroForm() {
@@ -146,7 +146,8 @@ export default function CentroForm() {
   // ---- listas ----
   const carregarCentrosPlano = useCallback(async (): Promise<ItemLista[]> => {
     const d = await consulta<any[]>(supabase.from('centros_custo').select('id, codigo, nome, fazenda_id, ativo').not('conta_plano_id', 'is', null).order('codigo'));
-    return d.map((c) => ({ id: c.id, titulo: `${c.codigo}  ${c.nome}`, detalhe: nomeUnidade(c.fazenda_id, fazendas), oculto: !c.ativo }));
+    // V168: só os centros de grau 3 recebem divisões (talhões, lotes...); os de grau 4 (AGRÍCOLA › Defensivos) não
+    return d.filter((c) => ehCodigoCentroPlano(c.codigo)).map((c) => ({ id: c.id, titulo: `${c.codigo}  ${c.nome}`, detalhe: nomeUnidade(c.fazenda_id, fazendas), oculto: !c.ativo }));
   }, [fazendas]);
 
   const carregarAreas = useCallback(
@@ -205,7 +206,7 @@ export default function CentroForm() {
     // centro do plano: o código de uma conta de grau 3 do grupo 4
     if (!pai) {
       if (!ehCodigoCentroPlano(cod)) {
-        setErros({ codigo: 'O centro de custo é o código de uma conta de grau 3 do grupo 4 do Plano de contas, ex.: 4.1.01.' });
+        setErros({ codigo: 'O centro de custo é o código de uma conta de grau 3 do grupo 4 do Plano de contas, ex.: 4.01.01.' });
         return setErro('Código inválido.');
       }
       if (!conta) {
@@ -331,7 +332,7 @@ export default function CentroForm() {
       {erro && <Aviso tipo="erro" texto={erro} />}
       <Aviso
         tipo="info"
-        texto="Os centros de custo são as contas de grau 3 do grupo 4 do Plano de contas (ex.: 4.1.01 AGRÍCOLA) e o sistema cria todos sozinho. Talhões, mangas e lotes também ganham a sua divisão sozinhos. Aqui você confere um centro pelo código ou cria uma divisão a mais dentro de um centro."
+        texto="Os centros de custo são as contas de grau 3 do grupo 4 do Plano de contas (ex.: 4.01.01 AGRÍCOLA; e cada conta de grau 4 dentro dele, ex.: 4.01.01.002 AGRÍCOLA › Defensivos) e o sistema cria todos sozinho. Talhões, mangas e lotes também ganham a sua divisão sozinhos. Aqui você confere um centro pelo código ou cria uma divisão a mais dentro de um centro."
       />
 
       <SeletorLista
@@ -343,14 +344,14 @@ export default function CentroForm() {
         dicaBusca="Código ou nome"
         vazio="Nenhum centro ainda. Rode no Supabase o arquivo do banco da V144."
       />
-      <Text style={estilos.nota}>Em branco: digite abaixo o código da conta de grau 3 (ex.: 4.1.01) e o nome vem do Plano de contas.</Text>
+      <Text style={estilos.nota}>Em branco: digite abaixo o código da conta de grau 3 (ex.: 4.01.01) e o nome vem do Plano de contas.</Text>
 
       <Campo
         rotulo="Código *"
         value={codigo}
         onChangeText={(t) => setCodigo(t.replace(/[^\d.-]/g, ''))}
         keyboardType="numbers-and-punctuation"
-        placeholder={pai ? `${pai.codigo}-001` : '4.1.01'}
+        placeholder={pai ? `${pai.codigo}-001` : '4.01.01'}
         ajuda={pai ? `Já vem o próximo número livre dentro de ${pai.codigo}.` : 'Código da conta de grau 3 do grupo 4.'}
         erro={erros.codigo}
       />

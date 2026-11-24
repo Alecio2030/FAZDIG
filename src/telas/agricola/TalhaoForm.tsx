@@ -639,7 +639,7 @@ export default function TalhaoForm() {
         </View>
       </View>
       <SeletorLista rotulo="Centro de custo do talhão" valorId={centroId} aoMudar={setCentroId} carregar={carregarCentros} permitirLimpar erro={erros.centro} vazio="O centro do talhão é criado sozinho ao gravar." />
-      <Text style={estilos.nota}>Em branco, vale o centro do próprio talhão, criado pelo sistema dentro do AGRÍCOLA da fazenda (ex.: 4.1.01-001).</Text>
+      <Text style={estilos.nota}>Em branco, vale o centro do próprio talhão, criado pelo sistema dentro do AGRÍCOLA da fazenda (ex.: 4.01.01-001).</Text>
       {calcExaustao && (
         <View style={estilos.calc}>
           <Par a="Exaustão mensal" b={formatarMoeda(calcExaustao.mensal)} forte />

@@ -7,26 +7,42 @@ import { consulta, supabase, traduzirErro } from '../lib/supabase';
 import { identAnimal } from '../lib/rebanho';
 import { cores, tam } from '../tema';
 
-type Animal = { id: string; numero_interno: number; brinco: string | null; nome: string | null; categoria: string | null };
+export type AnimalSel = { id: string; numero_interno: number; brinco: string | null; nome: string | null; categoria: string | null; sexo: string | null; data_nascimento: string | null };
+type Animal = AnimalSel;
 
-type Props = { loteId: string; valor: string[]; aoMudar: (ids: string[]) => void; erro?: string | null };
+type Props = {
+  /** animais de um lote... */
+  loteId?: string | null;
+  /** ...ou (V204) de todo o rebanho ativo da fazenda, opcionalmente só de um sexo */
+  fazendaId?: string | null;
+  sexo?: string | null;
+  valor: string[];
+  aoMudar: (ids: string[]) => void;
+  /** V204: devolve também os dados dos animais marcados (sexo e nascimento) */
+  aoMudarDados?: (animais: AnimalSel[]) => void;
+  erro?: string | null;
+};
 
 const MOSTRAR = 60;
 
 /** Marcar animais específicos de um lote (os que estão no rebanho). Busca por número, brinco ou nome. */
-export default function SeletorAnimais({ loteId, valor, aoMudar, erro }: Props) {
+export default function SeletorAnimais({ loteId, fazendaId, sexo, valor, aoMudar, aoMudarDados, erro }: Props) {
   const [animais, setAnimais] = useState<Animal[] | null>(null);
   const [falha, setFalha] = useState<string | null>(null);
   const [busca, setBusca] = useState('');
 
   useEffect(() => {
     setAnimais(null);
-    consulta<Animal[]>(
-      supabase.from('animais').select('id, numero_interno, brinco, nome, categoria').eq('lote_id', loteId).eq('situacao', 'ativo').order('numero_interno'),
-    )
-      .then(setAnimais)
+    let q = supabase.from('animais').select('id, numero_interno, brinco, nome, categoria, sexo, data_nascimento').eq('situacao', 'ativo');
+    if (loteId) q = q.eq('lote_id', loteId);
+    else if (fazendaId) {
+      q = q.eq('fazenda_id', fazendaId);
+      if (sexo) q = q.eq('sexo', sexo);
+    } else return setAnimais([]);
+    consulta<Animal[]>(q.order('numero_interno').limit(5000))
+      .then((l) => setAnimais(l.map((a) => ({ ...a, sexo: a.sexo?.trim() || null }))))
       .catch((e) => setFalha(traduzirErro(e)));
-  }, [loteId]);
+  }, [loteId, fazendaId, sexo]);
 
   const t = busca.trim().toLowerCase();
   const visiveis = useMemo(
@@ -38,7 +54,9 @@ export default function SeletorAnimais({ loteId, valor, aoMudar, erro }: Props) 
   );
 
   function alternar(id: string) {
-    aoMudar(valor.includes(id) ? valor.filter((x) => x !== id) : [...valor, id]);
+    const novos = valor.includes(id) ? valor.filter((x) => x !== id) : [...valor, id];
+    aoMudar(novos);
+    aoMudarDados?.((animais ?? []).filter((a) => novos.includes(a.id)));
   }
 
   if (falha) return <Aviso tipo="erro" texto={falha} />;
@@ -49,9 +67,10 @@ export default function SeletorAnimais({ loteId, valor, aoMudar, erro }: Props) 
       <Text style={estilos.contagem}>
         {valor.length} de {animais.length} marcados
       </Text>
-      {animais.length > 8 && <Busca valor={busca} aoMudar={setBusca} dica="Número, brinco ou nome" />}
+      {(animais.length > 8 || !loteId) && <Busca valor={busca} aoMudar={setBusca} dica="Número, brinco ou nome" />}
+      {!loteId && !t && animais.length > MOSTRAR ? <Text style={estilos.contagem}>Digite o brinco (ou o número) para achar o animal.</Text> : null}
       <View style={estilos.grade}>
-        {visiveis.slice(0, MOSTRAR).map((a) => {
+        {(!loteId && !t && animais.length > MOSTRAR ? animais.filter((a) => valor.includes(a.id)) : visiveis.slice(0, MOSTRAR)).map((a) => {
           const marcado = valor.includes(a.id);
           return (
             <Pressable

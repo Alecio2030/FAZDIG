@@ -3,6 +3,8 @@
 // (banco: centro_do_grau3, gatilho no plano). Dentro de cada centro ficam as DIVISÕES, também criadas
 // sozinhas para talhões (no 4.N.01), mangas e lotes (no 4.N.02): código do centro + "-" + nº (4.1.01-001).
 // Os centros do Particular (sócios) seguem o formato antigo (01, 01.01): não são do grupo 4.
+// V168: grau 2 com 2 dígitos (4.01.01); cada conta de grau 4 também é um centro (4.01.01.002 AGRÍCOLA › Defensivos),
+// filho do grau 3: escolhido no lançamento, ele já é a conta. Criados e renomeados pelo banco (centro_do_grau4).
 
 export type Centro = {
   id: string;

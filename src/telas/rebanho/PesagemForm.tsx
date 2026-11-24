@@ -4,7 +4,7 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import Tela from '../../componentes/Tela';
 import Campo from '../../componentes/Campo';
 import CampoData from '../../componentes/CampoData';
-import CampoNascimento, { NASCIMENTO_VAZIO, lerNascimento, nascimentoDoBanco, type ValorNascimento } from '../../componentes/CampoNascimento';
+import CampoNascimento, { NASCIMENTO_FAIXA, lerNascimento, nascimentoDoBanco, type ValorNascimento } from '../../componentes/CampoNascimento';
 import CampoPessoaBusca from '../../componentes/CampoPessoaBusca';
 import Botao from '../../componentes/Botao';
 import RodapeAcoes from '../../componentes/RodapeAcoes';
@@ -52,7 +52,7 @@ export default function PesagemForm() {
   const [sexo, setSexo] = useState<string[]>([]);
   const [racaId, setRacaId] = useState<string | null>(null);
   const [ferroId, setFerroId] = useState<string | null>(null);
-  const [nasc, setNasc] = useState<ValorNascimento>(NASCIMENTO_VAZIO);
+  const [nasc, setNasc] = useState<ValorNascimento>(NASCIMENTO_FAIXA);
   const [pesoArroba, setPesoArroba] = useState(String(ARROBA_PADRAO));
   const [pesadas, setPesadas] = useState<Pesada[]>([{ ...PESADA_VAZIA }]);
   const [obs, setObs] = useState('');
@@ -284,7 +284,7 @@ export default function PesagemForm() {
       <Text style={estilos.nota}>{loteId ? 'Vieram do lote; pode mudar.' : 'Dados dos animais desta pesagem.'} A pesagem não cria nem altera cadastro de animal.</Text>
       <Escolha rotulo="Sexo" opcoes={SEXOS} valor={sexo} aoMudar={setSexo} />
       <CampoRaca valorId={racaId} aoMudar={setRacaId} />
-      <CampoNascimento rotulo="Idade" valor={nasc} aoMudar={setNasc} baseIso={baseIso} erro={erros.nasc} />
+      <CampoNascimento rotulo="Idade" valor={nasc} aoMudar={setNasc} baseIso={baseIso} erro={erros.nasc} sexo={sexo[0] === 'M' || sexo[0] === 'F' ? sexo[0] : null} />
       <CampoFerro valorId={ferroId} aoMudar={setFerroId} />
       <Campo
         rotulo="Peso da arroba bruta (kg)"

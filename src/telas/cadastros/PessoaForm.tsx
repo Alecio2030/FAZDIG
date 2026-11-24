@@ -2,6 +2,8 @@ import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Alert } from '../../lib/alerta';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { entregarPessoaNova } from '../../lib/retorno';
+import FazendasCliente, { conferirFazendasCliente, gravarFazendasCliente, lerFazendasCliente, type FazendaCliente } from '../../componentes/FazendasCliente';
 import Tela from '../../componentes/Tela';
 import Campo from '../../componentes/Campo';
 import Botao from '../../componentes/Botao';
@@ -10,8 +12,10 @@ import Escolha from '../../componentes/Escolha';
 import Interruptor from '../../componentes/Interruptor';
 import Secao from '../../componentes/Secao';
 import { supabase, traduzirErro } from '../../lib/supabase';
-import { cpfCnpjValido, lerNumero, mascaraCep, mascaraCpfCnpj, mascaraTelefone, moedaParaCampo, somenteDigitos } from '../../lib/formatos';
+import { cpfCnpjValido, lerNumero, mascaraCpfCnpj, mascaraTelefone, moedaParaCampo, somenteDigitos } from '../../lib/formatos';
 import CampoMoeda from '../../componentes/CampoMoeda';
+import CampoCep from '../../componentes/CampoCep';
+import { conferirEndereco } from '../../lib/cep';
 import { BASES_MO, textoCustoPessoa } from '../../lib/maoObra';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores } from '../../tema';
@@ -64,20 +68,30 @@ export default function PessoaForm() {
   const { params } = useRoute<RouteProp<PilhaParams, 'PessoaForm'>>();
   const id = params?.id;
   const [aba, setAba] = useState<Aba>(params?.aba ?? 'cadastrar');
-  const [f, setF] = useState<Form>(VAZIO);
+  // V158: cadastro pedido de outra tela já vem com o nome digitado e o tipo (ex.: cliente)
+  const [f, setF] = useState<Form>(() => (params?.novo ? { ...VAZIO, nome: params.novo.nome, tipos: [params.novo.tipo] } : VAZIO));
   const [carregando, setCarregando] = useState(!!id);
+  // V159: fazendas do cliente produtor rural
+  const [fazCli, setFazCli] = useState<FazendaCliente[]>([]);
+  const [fazCliApagadas, setFazCliApagadas] = useState<string[]>([]);
+  const [conferirFazCli, setConferirFazCli] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [erros, setErros] = useState<Partial<Record<keyof Form, string>>>({});
   // Cadastrar: Pessoa | Banco. O banco tem ficha própria, só com os dados da agência.
   const [modoBanco, setModoBanco] = useState(!!params?.banco);
   const eBanco = id ? f.tipos.includes('banco') : modoBanco;
+  const exigeEndereco = !eBanco && (f.tipos.includes('cliente') || f.tipos.includes('fornecedor'));
 
   const muda = <K extends keyof Form>(campo: K, valor: Form[K]) => setF((atual) => ({ ...atual, [campo]: valor }));
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: id ? (eBanco ? 'Editar banco' : 'Editar pessoa') : 'Pessoas' });
   }, [navegacao, id, eBanco]);
+
+  useEffect(() => {
+    if (id) lerFazendasCliente(id).then(setFazCli).catch(() => setFazCli([]));
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
@@ -107,14 +121,18 @@ export default function PessoaForm() {
     if (f.cpf_cnpj && !cpfCnpjValido(f.cpf_cnpj)) e.cpf_cnpj = 'CPF ou CNPJ inválido. Confira os números.';
     if (f.email.trim() && !/^\S+@\S+\.\S+$/.test(f.email.trim())) e.email = 'E-mail inválido.';
     if (f.uf && f.uf.length !== 2) e.uf = '2 letras';
+    // V162: cliente e fornecedor precisam de CEP, cidade e UF (a NF-e e a GTA exigem)
+    if (!eBanco && (f.tipos.includes('cliente') || f.tipos.includes('fornecedor'))) Object.assign(e, conferirEndereco(f));
     const tipos = eBanco ? Array.from(new Set([...f.tipos, 'banco'])) : f.tipos.filter((t) => t !== 'banco');
     const criador = f.tipos.includes('criador');
     const trabalha = f.tipos.includes('funcionario') || f.tipos.includes('parceiro');
     if (criador && !/^[A-Z]{2,5}$/.test(f.sui)) e.sui = 'A Série Alfabética tem de 2 a 5 letras, sem números (ex.: SCS).';
     if (criador && (!/^\d+$/.test(f.rgn_ultimo || '0') || Number(f.rgn_ultimo) > 99999)) e.rgn_ultimo = 'Número de 0 a 99.999.';
     setErros(e);
-    if (Object.keys(e).length) {
-      setErro('Confira os campos marcados em vermelho.');
+    const faltaFazCli = f.tipos.includes('cliente') && !eBanco ? conferirFazendasCliente(fazCli) : null;
+    setConferirFazCli(!!faltaFazCli);
+    if (Object.keys(e).length || faltaFazCli) {
+      setErro(Object.keys(e).length ? 'Confira os campos marcados em vermelho.' : faltaFazCli);
       return;
     }
 
@@ -177,12 +195,27 @@ export default function PessoaForm() {
       mo_base: valorMo ? f.mo_base : null,
       mo_valor: valorMo,
     };
-    const { error } = id
-      ? await supabase.from('pessoas').update(registro).eq('id', id)
-      : await supabase.from('pessoas').insert(registro);
+    const { data: gravada, error } = id
+      ? await supabase.from('pessoas').update(registro).eq('id', id).select('id').single()
+      : await supabase.from('pessoas').insert(registro).select('id').single();
+    if (error) {
+      setSalvando(false);
+      return setErro(traduzirErro(error));
+    }
+    // V159: fazendas do cliente produtor rural
+    const pessoaGravada = id ?? gravada?.id;
+    if (pessoaGravada && (fazCli.length || fazCliApagadas.length)) {
+      try {
+        await gravarFazendasCliente(pessoaGravada, f.tipos.includes('cliente') ? fazCli : [], f.tipos.includes('cliente') ? fazCliApagadas : [...fazCliApagadas, ...fazCli.filter((x) => x.id).map((x) => x.id!)]);
+      } catch (e) {
+        setSalvando(false);
+        return setErro(`A pessoa foi salva, mas as fazendas do cliente não: ${traduzirErro(e)}`);
+      }
+    }
     setSalvando(false);
-    if (error) return setErro(traduzirErro(error));
-    if (id) navegacao.goBack();
+    if (id) return navegacao.goBack();
+    // V158: veio de outra tela (ex.: Venda): volta para ela já com a pessoa escolhida
+    if (params?.novo && gravada?.id && entregarPessoaNova(gravada.id)) return navegacao.goBack();
     else navegacao.replace('PessoaForm', eBanco ? { banco: true, aviso: `Banco ${registro.nome} salvo. Pode cadastrar o próximo.` } : { aviso: `Cadastro de ${registro.nome} salvo. Pode cadastrar a próxima pessoa.` });
   }
 
@@ -321,13 +354,30 @@ export default function PessoaForm() {
         </>
       )}
 
+      {f.tipos.includes('cliente') && !eBanco && (
+        <>
+          <Secao titulo="Cliente produtor rural: fazendas" />
+          <FazendasCliente lista={fazCli} aoMudar={setFazCli} aoApagar={(x) => setFazCliApagadas((l) => [...l, x])} conferir={conferirFazCli} />
+        </>
+      )}
+
       <Secao titulo="Contato" />
       <Campo rotulo="Celular / WhatsApp" value={f.celular} onChangeText={(t) => muda('celular', mascaraTelefone(t))} keyboardType="phone-pad" />
       <Campo rotulo="Telefone fixo" value={f.telefone} onChangeText={(t) => muda('telefone', mascaraTelefone(t))} keyboardType="phone-pad" />
       <Campo rotulo="E-mail" value={f.email} onChangeText={(t) => muda('email', t)} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} erro={erros.email} />
 
       <Secao titulo="Endereço" />
-      <Campo rotulo="CEP" value={f.cep} onChangeText={(t) => muda('cep', mascaraCep(t))} keyboardType="number-pad" maxLength={9} />
+      <CampoCep
+        rotulo={exigeEndereco ? 'CEP *' : 'CEP'}
+        valor={f.cep}
+        aoMudar={(t) => muda('cep', t)}
+        aoAchar={(e) =>
+          setF((a) => ({ ...a, municipio: e.municipio, uf: e.uf, logradouro: e.logradouro || a.logradouro, bairro: e.bairro || a.bairro }))
+        }
+        erro={erros.cep}
+        ufAtual={f.uf}
+        cidadeAtual={f.municipio}
+      />
       <Campo rotulo="Rua, estrada ou córrego" value={f.logradouro} onChangeText={(t) => muda('logradouro', t)} autoCapitalize="words" />
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <View style={{ width: 110 }}>
@@ -340,11 +390,11 @@ export default function PessoaForm() {
       <Campo rotulo="Bairro ou localidade" value={f.bairro} onChangeText={(t) => muda('bairro', t)} autoCapitalize="words" />
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <View style={{ flex: 1 }}>
-          <Campo rotulo="Município" value={f.municipio} onChangeText={(t) => muda('municipio', t)} autoCapitalize="words" />
+          <Campo rotulo={exigeEndereco ? 'Cidade *' : 'Cidade'} value={f.municipio} onChangeText={(t) => muda('municipio', t)} autoCapitalize="words" erro={erros.municipio} />
         </View>
         <View style={{ width: 84 }}>
           <Campo
-            rotulo="UF"
+            rotulo={exigeEndereco ? 'UF *' : 'UF'}
             value={f.uf}
             onChangeText={(t) => muda('uf', t.replace(/[^A-Za-z]/g, '').toUpperCase())}
             autoCapitalize="characters"

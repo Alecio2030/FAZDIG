@@ -52,6 +52,28 @@ export function baixarArquivo(nome: string, conteudo: string, tipo = 'applicatio
   }
 }
 
+/** V157: baixa um arquivo que veio em base64 (PDF do DANFE, por exemplo). Só no navegador. */
+export function baixarBase64(nome: string, base64: string, tipo = 'application/pdf'): boolean {
+  if (!NO_NAVEGADOR) return false;
+  try {
+    const w = globalThis as any;
+    const bin = w.atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = w.URL.createObjectURL(new w.Blob([bytes], { type: tipo }));
+    const a = w.document.createElement('a');
+    a.href = url;
+    a.download = nome;
+    w.document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => w.URL.revokeObjectURL(url), 60_000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * No navegador: nome, cor e ícone do app para o "Adicionar à tela de início" do celular.
  * Os arquivos ficam na pasta public do projeto (vão junto na publicação).
@@ -77,6 +99,11 @@ export function prepararPaginaWeb() {
     por('meta', { name: 'mobile-web-app-capable', content: 'yes' });
     por('meta', { name: 'apple-mobile-web-app-title', content: 'Fazenda Digital' });
     por('meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'default' });
+    // V184: guarda o app no aparelho para abrir sem sinal (Modo Vaqueiro)
+    const nav = (globalThis as any).navigator;
+    if (nav?.serviceWorker && (globalThis as any).location?.protocol === 'https:') {
+      nav.serviceWorker.register('/sw.js').catch(() => undefined);
+    }
   } catch {
     // sem isso o app funciona igual; só não ganha o ícone próprio
   }

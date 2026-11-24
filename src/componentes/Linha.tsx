@@ -3,10 +3,10 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { cores, tam } from '../tema';
 
-type Props = { titulo: string; linhas?: (string | null | undefined)[]; direita?: string; inativo?: boolean; onPress: () => void };
+type Props = { titulo: string; linhas?: (string | null | undefined)[]; direita?: string; inativo?: boolean; onPress: () => void; extra?: React.ReactNode };
 
 /** Um item de lista de cadastro: nome em cima, detalhes embaixo, valor à direita. */
-export default function Linha({ titulo, linhas = [], direita, inativo = false, onPress }: Props) {
+export default function Linha({ titulo, linhas = [], direita, inativo = false, onPress, extra }: Props) {
   const detalhes = linhas.filter(Boolean) as string[];
   return (
     <Pressable onPress={onPress} accessibilityRole="button" style={({ pressed }) => [estilos.item, pressed && { backgroundColor: '#F3F6F2' }]}>
@@ -18,6 +18,7 @@ export default function Linha({ titulo, linhas = [], direita, inativo = false, o
         {detalhes.map((d, i) => (
           <Text key={i} style={estilos.detalhe}>{d}</Text>
         ))}
+        {extra}
       </View>
       {direita ? <Text style={estilos.direita}>{direita}</Text> : null}
       <Ionicons name="chevron-forward" size={20} color={cores.textoSuave} />

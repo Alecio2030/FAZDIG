@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { voltarDaConsulta } from '../../lib/voltarConsulta';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Alert } from '../../lib/alerta';
@@ -7,7 +7,7 @@ import Tela from '../../componentes/Tela';
 import Campo from '../../componentes/Campo';
 import CampoMoeda from '../../componentes/CampoMoeda';
 import CampoData from '../../componentes/CampoData';
-import CampoNascimento, { NASCIMENTO_VAZIO, lerNascimento, nascimentoDoBanco, type ValorNascimento } from '../../componentes/CampoNascimento';
+import CampoNascimento, { NASCIMENTO_FAIXA, lerNascimento, nascimentoDoBanco, type ValorNascimento } from '../../componentes/CampoNascimento';
 import CampoPessoaBusca from '../../componentes/CampoPessoaBusca';
 import Botao from '../../componentes/Botao';
 import Aviso from '../../componentes/Aviso';
@@ -26,6 +26,8 @@ import { dataValida, doBanco, hojeBR, hojeBanco, paraBanco } from '../../lib/dat
 import { formatarNumero, lerNumero, moedaParaCampo, numeroParaCampo } from '../../lib/formatos';
 import { CATEGORIAS, SEXOS, codigoLote } from '../../lib/rebanho';
 import { useSigla } from '../../lib/useSigla';
+import { FINALIDADES, LINHA_VAZIA, MAX_INDIVIDUAL, SEM_LOTE, type LinhaIndividual } from '../../lib/lotes';
+import GradeIndividual, { type Dica, type GrupoGrade } from './GradeIndividual';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -33,8 +35,21 @@ const ORIGENS = [
   { valor: 'compra', rotulo: 'Compra' },
   { valor: 'parceria', rotulo: 'Parceria' },
   { valor: 'cria', rotulo: 'Cria' },
+  { valor: 'outros_lotes', rotulo: 'De outro lote' },
   { valor: 'outra', rotulo: 'Outra' },
 ];
+const SIM_NAO = [
+  { valor: 'nao', rotulo: 'Não' },
+  { valor: 'sim', rotulo: 'Sim' },
+];
+
+/** V200 · Origem do lote formado de outros lotes (ou do rebanho individual, sem lote). */
+type Fonte = { chave: string; loteId: string | null; qtd: string };
+type ItemFonte = ItemLista & { saldo: number };
+type AnimalLote = { id: string; numero_interno: number; brinco: string | null; ferro_id: string | null; peso_atual_kg: number | null };
+let seqFonte = 1;
+const novaFonte = (): Fonte => ({ chave: `f${seqFonte++}`, loteId: null, qtd: '' });
+const intervalo = (n: number) => Array.from({ length: Math.max(0, Math.min(n, MAX_INDIVIDUAL)) }, (_, i) => i);
 const PARCERIAS = [
   { valor: 'apascentamento', rotulo: 'Apascentamento' },
   { valor: 'engorda', rotulo: 'Engorda' },
@@ -63,7 +78,7 @@ export default function LoteForm() {
   const [quantidade, setQuantidade] = useState('');
   const [racaId, setRacaId] = useState<string | null>(null);
   const [ferroId, setFerroId] = useState<string | null>(null);
-  const [nasc, setNasc] = useState<ValorNascimento>(NASCIMENTO_VAZIO);
+  const [nasc, setNasc] = useState<ValorNascimento>(NASCIMENTO_FAIXA);
   const [mangaId, setMangaId] = useState<string | null>(null);
   const [proprietario, setProprietario] = useState<string[]>(['proprio']);
   const [donoId, setDonoId] = useState<string | null>(null);
@@ -92,6 +107,17 @@ export default function LoteForm() {
   const [mineralKg, setMineralKg] = useState('');
   const [alimentarId, setAlimentarId] = useState<string | null>(null);
   const [alimentarKg, setAlimentarKg] = useState('');
+  const [finalidade, setFinalidade] = useState<string[]>([]);
+  const [finalidadeOutra, setFinalidadeOutra] = useState('');
+  const [individual, setIndividual] = useState<string[]>(['nao']);
+  const [fontes, setFontes] = useState<Fonte[]>(() => [novaFonte()]);
+  const [itensFonte, setItensFonte] = useState<ItemFonte[]>([]);
+  const [dados, setDados] = useState<Record<string, LinhaIndividual>>({});
+  const [dicas, setDicas] = useState<Record<string, Dica>>({});
+  const [pesoMexido, setPesoMexido] = useState(false);
+  const [ferros, setFerros] = useState<ItemLista[]>([]);
+  const [animaisLote, setAnimaisLote] = useState<AnimalLote[] | null>(null);
+  const [dataPeso, setDataPeso] = useState(hojeBR());
   const [original, setOriginal] = useState<Composicao | null>(null);
   const [cabecas, setCabecas] = useState(0);
   const [carregando, setCarregando] = useState(!!id);
@@ -159,6 +185,9 @@ export default function LoteForm() {
           setMineralKg(numeroParaCampo(data.mineral_kg_cab_dia));
           setAlimentarId(data.alimentar_insumo_id);
           setAlimentarKg(numeroParaCampo(data.alimentar_kg_cab_dia));
+          setFinalidade(data.finalidade ? [data.finalidade] : []);
+          setFinalidadeOutra(data.finalidade_outra ?? '');
+          setIndividual([data.controle_individual ? 'sim' : 'nao']);
           setOriginal({
             categoria: data.categoria,
             racaId: data.raca_id,
@@ -181,6 +210,157 @@ export default function LoteForm() {
         .eq('situacao', 'ativo')
         .then(({ count }) => setCabecas(count ?? 0));
     }, [id]),
+  );
+
+  const outrosLotes = origem[0] === 'outros_lotes';
+  const ind = individual[0] === 'sim';
+  const sexoLote = sexo[0] === 'M' || sexo[0] === 'F' ? (sexo[0] as 'M' | 'F') : null;
+
+  // Ferros (uma vez só, para a grade individual).
+  useEffect(() => {
+    if (!ind || ferros.length) return;
+    supabase
+      .from('ferros')
+      .select('id, descricao, proprio, pessoas ( nome )')
+      .order('proprio', { ascending: false })
+      .order('descricao')
+      .then(({ data: d }) =>
+        setFerros(
+          (d ?? []).map((x: any) => {
+            const dono = Array.isArray(x.pessoas) ? x.pessoas[0] : x.pessoas;
+            return { id: x.id, titulo: x.descricao, detalhe: x.proprio ? 'Ferro próprio' : `De ${dono?.nome ?? 'terceiro'}` };
+          }),
+        ),
+      );
+  }, [ind, ferros.length]);
+
+  // Origens possíveis (lotes ativos do mesmo sexo, com saldo, e o rebanho individual sem lote).
+  useEffect(() => {
+    if (id || !outrosLotes || !fid || !sexoLote) return setItensFonte([]);
+    let vivo = true;
+    (async () => {
+      const lotes = await consulta<any[]>(supabase.from('lotes').select('id, numero, descricao').eq('fazenda_id', fid).eq('situacao', 'ativo').order('numero'));
+      const anim = await consulta<any[]>(supabase.from('animais').select('lote_id').eq('fazenda_id', fid).eq('situacao', 'ativo').eq('sexo', sexoLote).limit(20000));
+      const cont: Record<string, number> = {};
+      for (const a of anim) cont[a.lote_id ?? SEM_LOTE] = (cont[a.lote_id ?? SEM_LOTE] ?? 0) + 1;
+      const itens: ItemFonte[] = lotes
+        .filter((l) => (cont[l.id] ?? 0) > 0)
+        .map((l) => ({ id: l.id, titulo: codigoLote(l.numero, sigla) + (l.descricao ? ` – ${l.descricao}` : ''), detalhe: `${formatarNumero(cont[l.id])} ${sexoLote === 'M' ? 'machos' : 'fêmeas'}`, saldo: cont[l.id] }));
+      if (cont[SEM_LOTE]) itens.push({ id: SEM_LOTE, titulo: 'Rebanho individual (sem lote)', detalhe: `${formatarNumero(cont[SEM_LOTE])} ${sexoLote === 'M' ? 'machos' : 'fêmeas'} · pelo brinco`, saldo: cont[SEM_LOTE] });
+      if (vivo) setItensFonte(itens);
+    })().catch((e) => vivo && setErro(traduzirErro(e)));
+    return () => {
+      vivo = false;
+    };
+  }, [id, outrosLotes, fid, sexoLote, sigla]);
+  const carregarFontes = useCallback(async (): Promise<ItemLista[]> => itensFonte, [itensFonte]);
+
+  // Do rebanho individual só vêm animais identificados: liga o controle individual sozinho.
+  useEffect(() => {
+    if (!id && outrosLotes && fontes.some((f) => f.loteId === SEM_LOTE) && !ind) setIndividual(['sim']);
+  }, [id, outrosLotes, fontes, ind]);
+
+  // Edição com controle individual: os animais do lote.
+  useEffect(() => {
+    if (!id || !ind) return;
+    supabase
+      .from('animais')
+      .select('id, numero_interno, brinco, ferro_id, peso_atual_kg')
+      .eq('lote_id', id)
+      .eq('situacao', 'ativo')
+      .order('numero_interno')
+      .limit(MAX_INDIVIDUAL)
+      .then(({ data: d, error: e }) => {
+        if (e) return setErro(traduzirErro(e));
+        const lista = (d ?? []) as AnimalLote[];
+        setAnimaisLote(lista);
+        setDados((ant) => {
+          const novo = { ...ant };
+          for (const a of lista) if (!novo[a.id]) novo[a.id] = { brinco: a.brinco ?? '', ferroId: a.ferro_id, peso: numeroParaCampo(a.peso_atual_kg) };
+          return novo;
+        });
+      });
+  }, [id, ind, cabecas]);
+
+  const qtdFontes = fontes.reduce((s, f) => s + (Number(f.qtd) || 0), 0);
+  const qtdNova = outrosLotes ? qtdFontes : Number(quantidade || 0);
+
+  // Linhas da grade: no cadastro, uma por cabeça (por origem, quando vem de outros lotes); na edição, os animais do lote.
+  const grupos: GrupoGrade[] = useMemo(() => {
+    const linha = (chave: string, rotulo: string) => ({ chave, rotulo, valor: dados[chave] ?? LINHA_VAZIA, dica: dicas[chave] ?? null });
+    if (id) return [{ chave: 'e', linhas: (animaisLote ?? []).map((a) => linha(a.id, `nº ${a.numero_interno}`)) }];
+    if (!outrosLotes) return [{ chave: 'n', linhas: intervalo(qtdNova).map((i) => linha(`n|${i}`, String(i + 1))) }];
+    let ord = 0;
+    return fontes
+      .filter((f) => f.loteId && Number(f.qtd) > 0)
+      .map((f) => ({
+        chave: f.chave,
+        titulo: `${itensFonte.find((x) => x.id === f.loteId)?.titulo ?? 'Origem'} · ${formatarNumero(Number(f.qtd))} cab.`,
+        linhas: intervalo(Number(f.qtd)).map((i) => linha(`${f.chave}|${i}`, String(++ord))),
+      }));
+  }, [id, animaisLote, outrosLotes, qtdNova, fontes, itensFonte, dados, dicas]);
+  const linhasGrade = useMemo(() => grupos.flatMap((g) => g.linhas), [grupos]);
+
+  const mudarLinha = useCallback((chave: string, v: LinhaIndividual) => {
+    setDados((ant) => {
+      if ((ant[chave]?.peso ?? '') !== v.peso) setPesoMexido(true);
+      return { ...ant, [chave]: v };
+    });
+    if ((v.brinco ?? '') === '') setDicas((ant) => (ant[chave] ? { ...ant, [chave]: undefined as any } : ant));
+  }, []);
+
+  // Pesos individuais → Peso Bruto (Inicial no cadastro, Parcial na edição): médio dos pesados; total = médio × cabeças.
+  const resumoPesos = useMemo(() => {
+    const pesos = linhasGrade.map((l) => lerNumero(l.valor.peso)).filter((n): n is number => n != null && n > 0);
+    if (!pesos.length) return null;
+    const medio = pesos.reduce((s, n) => s + n, 0) / pesos.length;
+    return { pesados: pesos.length, medio };
+  }, [linhasGrade]);
+  useEffect(() => {
+    if (!ind || !pesoMexido || !resumoPesos) return;
+    const cab = id ? cabecas : qtdNova;
+    const total = resumoPesos.medio * (cab || resumoPesos.pesados);
+    if (id) {
+      setPesoParData(dataPeso);
+      setPesoParMedio(paraCampo(resumoPesos.medio));
+      setPesoParTotal(paraCampo(total));
+    } else {
+      setPesoIniMedio(paraCampo(resumoPesos.medio));
+      setPesoIniTotal(paraCampo(total));
+    }
+  }, [ind, pesoMexido, resumoPesos, id, cabecas, qtdNova, dataPeso]);
+
+  // Ao sair do brinco: diz onde está o animal (ou se é brinco novo).
+  const verificarBrinco = useCallback(
+    async (chave: string, brinco: string) => {
+      const b = brinco.trim();
+      if (!b || !fid) return;
+      const { data: achados } = await supabase
+        .from('animais')
+        .select('id, lote_id, sexo, lote:lotes!animais_lote_id_fkey ( numero )')
+        .eq('fazenda_id', fid)
+        .eq('situacao', 'ativo')
+        .ilike('brinco', b.replace(/[%_]/g, ''))
+        .limit(1);
+      const a: any = achados?.[0];
+      const ondeEsta = a ? (a.lote_id ? `no lote ${codigoLote((Array.isArray(a.lote) ? a.lote[0] : a.lote)?.numero, sigla)}` : 'sem lote') : '';
+      let dica: Dica | null = null;
+      if (id) {
+        if (a && a.id !== chave) dica = { tipo: 'erro', texto: `Brinco já é de outro animal (${ondeEsta}).` };
+      } else if (!outrosLotes) {
+        if (a) dica = { tipo: 'erro', texto: `Brinco já é de outro animal (${ondeEsta}).` };
+      } else {
+        const fonte = fontes.find((f) => chave.startsWith(`${f.chave}|`));
+        const loteFonte = fonte?.loteId === SEM_LOTE ? null : fonte?.loteId ?? null;
+        if (a && a.sexo !== sexoLote) dica = { tipo: 'erro', texto: `Este brinco é de ${a.sexo === 'M' ? 'macho' : 'fêmea'} (${ondeEsta}).` };
+        else if (a && (a.lote_id ?? null) === loteFonte) dica = { tipo: 'ok', texto: `✓ ${ondeEsta === 'sem lote' ? 'Animal sem lote' : 'Está ' + ondeEsta}` };
+        else if (a) dica = { tipo: 'erro', texto: `Está ${ondeEsta}. Mude a origem ou o brinco.` };
+        else if (fonte?.loteId === SEM_LOTE) dica = { tipo: 'erro', texto: 'Brinco não encontrado no rebanho.' };
+        else dica = { tipo: 'aviso', texto: 'Brinco novo: vai para um animal sem brinco deste lote.' };
+      }
+      setDicas((ant) => ({ ...ant, [chave]: dica as any }));
+    },
+    [fid, id, outrosLotes, fontes, sexoLote, sigla],
   );
 
   // ---- listas ----
@@ -242,9 +422,42 @@ export default function LoteForm() {
     const n = quantidade.trim() ? Number(quantidade) : 0;
     const lido = lerNascimento(nasc, baseIso);
     if (sexo.length === 0) e.sexo = 'Escolha o sexo do lote.';
-    if (!id && (!Number.isInteger(n) || n < 0 || n > 5000)) e.quantidade = 'Informe um número de 0 a 5.000.';
+    if (!id && !outrosLotes && (!Number.isInteger(n) || n < 0 || n > 5000)) e.quantidade = 'Informe um número de 0 a 5.000.';
     if (lido.erro) e.nasc = lido.erro;
-    else if (!id && n > 0 && !lido.iso) e.nasc = 'Informe a idade: cada cabeça vira um animal, e animal não entra sem idade.';
+    else if (!id && !outrosLotes && n > 0 && !lido.iso) e.nasc = 'Informe a idade: cada cabeça vira um animal, e animal não entra sem idade.';
+    if (finalidade[0] === 'outra' && !finalidadeOutra.trim()) e.finalidadeOutra = 'Informe qual é a finalidade.';
+    if (!id && outrosLotes) {
+      const usados = new Set<string>();
+      fontes.forEach((f, i) => {
+        const item = itensFonte.find((x) => x.id === f.loteId);
+        const q = Number(f.qtd) || 0;
+        if (!f.loteId) e[`fonte${i}`] = 'Escolha de onde vêm os animais.';
+        else if (usados.has(f.loteId)) e[`fonte${i}`] = 'Esta origem já está em outra linha.';
+        else if (q < 1) e[`fonte${i}`] = 'Informe a quantidade.';
+        else if (item && q > item.saldo) e[`fonte${i}`] = `Só há ${formatarNumero(item.saldo)} nesta origem.`;
+        if (f.loteId) usados.add(f.loteId);
+      });
+      if (qtdFontes > 5000) e.fonte0 = 'No máximo 5.000 cabeças.';
+      // do rebanho individual, cada animal pelo brinco
+      fontes.forEach((f) => {
+        if (f.loteId !== SEM_LOTE) return;
+        intervalo(Number(f.qtd) || 0).forEach((i) => {
+          if (!(dados[`${f.chave}|${i}`]?.brinco ?? '').trim()) e.grade = 'Do rebanho individual (sem lote), informe o brinco de cada animal.';
+        });
+      });
+    }
+    if (ind) {
+      const vistos = new Set<string>();
+      for (const l of linhasGrade) {
+        const b = l.valor.brinco.trim().toUpperCase();
+        if (b && vistos.has(b)) e.grade = `O brinco ${b} está repetido na lista.`;
+        if (b) vistos.add(b);
+        if (l.valor.peso.trim() && (lerNumero(l.valor.peso) == null || (lerNumero(l.valor.peso) ?? 0) <= 0)) e.grade = `Peso inválido na linha ${l.rotulo}.`;
+        if (l.dica?.tipo === 'erro') e.grade = `Confira o brinco da linha ${l.rotulo}: ${l.dica.texto}`;
+      }
+      if (!id && qtdNova > MAX_INDIVIDUAL) e.grade = `Com controle individual, até ${formatarNumero(MAX_INDIVIDUAL)} cabeças por vez. Abra o lote e identifique os demais depois.`;
+      if (id && pesoMexido && (!dataPeso || !dataValida(dataPeso))) e.dataPeso = 'Informe a data do peso.';
+    }
     if (terceiro && !donoId) e.dono = 'Informe o proprietário dos animais.';
     if (!abertura || !dataValida(abertura)) e.abertura = 'Informe a data de criação.';
     if (origem[0] === 'parceria' && parceria.length === 0) e.parceria = 'Escolha: Apascentamento ou Engorda.';
@@ -303,39 +516,68 @@ export default function LoteForm() {
       mineral_kg_cab_dia: fim.minKg,
       alimentar_insumo_id: alimentarId,
       alimentar_kg_cab_dia: fim.aliKg,
+      finalidade: finalidade[0] ?? null,
+      finalidade_outra: finalidade[0] === 'outra' ? finalidadeOutra.trim() || null : null,
+      controle_individual: ind,
     };
+    const linhaParaEnvio = (v: LinhaIndividual) => ({ brinco: v.brinco.trim() || null, ferro: v.ferroId, peso: lerNumero(v.peso) });
 
     setSalvando(true);
 
     if (!id) {
-      const { data, error } = await supabase.rpc('abrir_lote', {
-        p_fazenda: fid,
-        p_sexo: sexo[0],
-        p_quantidade: n,
-        p_descricao: descricao.trim() || null,
-        p_categoria: categoria[0] ?? null,
-        p_raca: racaId,
-        p_ferro: ferroId,
-        p_nascimento: lido.iso,
-        p_nasc_aprox: lido.aprox,
-        p_manga: mangaId,
-        p_proprietario: proprietario[0],
-        p_dono: terceiro ? donoId : null,
-        p_abertura: baseIso,
-        p_obs: obs.trim() || null,
-      });
-      if (error) {
-        setSalvando(false);
-        return setErro(traduzirErro(error));
+      // V200: tudo numa operação só (lote, origem, animais vindos de outros lotes e identificação individual).
+      let montar: any = null;
+      if (outrosLotes) {
+        const comFonte = fontes.filter((f) => f.loteId && Number(f.qtd) > 0);
+        montar = {
+          fontes: comFonte.map((f) => ({ lote: f.loteId === SEM_LOTE ? null : f.loteId, quantidade: Number(f.qtd) })),
+          animais: ind
+            ? comFonte.flatMap((f, fi) =>
+                intervalo(Number(f.qtd))
+                  .map((i) => dados[`${f.chave}|${i}`])
+                  .filter((v) => v && (v.brinco.trim() || v.ferroId || v.peso.trim()))
+                  .map((v) => ({ fonte: fi, ...linhaParaEnvio(v!) })),
+              )
+            : [],
+        };
+      } else if (ind && n > 0) {
+        const linhas = intervalo(n).map((i) => dados[`n|${i}`] ?? LINHA_VAZIA);
+        while (linhas.length && !linhas[linhas.length - 1].brinco.trim() && !linhas[linhas.length - 1].ferroId && !linhas[linhas.length - 1].peso.trim()) linhas.pop();
+        if (linhas.length) montar = { animais: linhas.map(linhaParaEnvio) };
       }
-      const r = data as { id: string; numero: number; cabecas: number };
-      const { error: eExtra } = await supabase.from('lotes').update(extras).eq('id', r.id);
+      const { data, error } = await supabase.rpc('criar_lote', {
+        p: {
+          abrir: {
+            fazenda: fid,
+            sexo: sexo[0],
+            quantidade: outrosLotes ? 0 : n,
+            descricao: descricao.trim() || null,
+            categoria: categoria[0] ?? null,
+            raca: racaId,
+            ferro: ferroId,
+            nascimento: lido.iso,
+            nasc_aprox: lido.aprox,
+            manga: mangaId,
+            proprietario: proprietario[0],
+            dono: terceiro ? donoId : null,
+            abertura: baseIso,
+            obs: obs.trim() || null,
+          },
+          extras,
+          montar,
+        },
+      });
       setSalvando(false);
-      if (eExtra) return setErro(`Lote ${codigoLote(r.numero, sigla)} aberto, mas a origem e os pesos não foram gravados: ${traduzirErro(eExtra)} Abra o lote pela Consulta e salve de novo.`);
+      if (error) return setErro(traduzirErro(error));
+      const r = data as { id: string; numero: number; cabecas: number };
       navegacao.replace('LoteForm', {
         aviso:
           `Lote ${codigoLote(r.numero, sigla)} aberto com ${formatarNumero(r.cabecas)} ${r.cabecas === 1 ? 'cabeça' : 'cabeças'}.` +
-          (r.cabecas > 0 ? ' Cada uma recebeu um número interno; o brinco pode ser posto depois em cada animal.' : ''),
+          (outrosLotes
+            ? ' Os animais saíram dos lotes de origem (a troca de lote fica em Pecuário › Movimentações).'
+            : r.cabecas > 0 && !ind
+              ? ' Cada uma recebeu um número interno; o brinco pode ser posto depois em cada animal.'
+              : ''),
       });
       return;
     }
@@ -374,6 +616,31 @@ export default function LoteForm() {
     if (error) {
       setSalvando(false);
       return setErro(traduzirErro(error));
+    }
+
+    // V200: identificação e peso individual dos animais do lote (só o que mudou)
+    if (ind && animaisLote?.length) {
+      const mudados = animaisLote
+        .map((a) => ({ a, v: dados[a.id] ?? LINHA_VAZIA }))
+        .filter(({ a, v }) => (a.brinco ?? '') !== v.brinco.trim() || (a.ferro_id ?? null) !== (v.ferroId ?? null) || lerNumero(v.peso) !== (a.peso_atual_kg == null ? null : Number(a.peso_atual_kg)));
+      if (mudados.length) {
+        const { error: eInd } = await supabase.rpc('identificar_animais_lote', {
+          p: {
+            lote: id,
+            data: paraBanco(dataPeso) ?? hojeBanco(),
+            animais: mudados.map(({ a, v }) => ({
+              id: a.id,
+              brinco: v.brinco.trim() || null,
+              ferro: v.ferroId,
+              peso: lerNumero(v.peso) !== (a.peso_atual_kg == null ? null : Number(a.peso_atual_kg)) ? lerNumero(v.peso) : null,
+            })),
+          },
+        });
+        if (eInd) {
+          setSalvando(false);
+          return setErro(`O lote foi salvo, mas a identificação dos animais não: ${traduzirErro(eInd)}`);
+        }
+      }
     }
 
     const mudou =
@@ -452,7 +719,7 @@ export default function LoteForm() {
 
   const sexoAtual = sexo[0] as 'M' | 'F' | undefined;
   const sexoTravado = !!id && cabecas > 0 && !!sexoAtual;
-  const qtdCabecas = id ? cabecas : Number(quantidade || 0);
+  const qtdCabecas = id ? cabecas : qtdNova;
 
   const abas = !id && <AbasCadastro aba={aba} aoMudar={setAba} />;
 
@@ -508,8 +775,75 @@ export default function LoteForm() {
         </View>
       )}
 
+      {/* ----- finalidade (V200) ----- */}
+      <Escolha rotulo="Finalidade do lote" opcoes={FINALIDADES} valor={finalidade} aoMudar={(v) => setFinalidade(finalidade[0] === v[0] ? [] : v)} />
+      {finalidade[0] === 'outra' && (
+        <Campo rotulo="Qual finalidade? *" value={finalidadeOutra} onChangeText={setFinalidadeOutra} autoCapitalize="sentences" erro={erros.finalidadeOutra} />
+      )}
+
       {/* ----- origem ----- */}
-      <Escolha rotulo="Origem" opcoes={ORIGENS} valor={origem} aoMudar={setOrigem} />
+      <Escolha
+        rotulo="Origem"
+        opcoes={id && origem[0] !== 'outros_lotes' ? ORIGENS.filter((o) => o.valor !== 'outros_lotes') : ORIGENS}
+        valor={origem}
+        aoMudar={(v) => {
+          if (id && origem[0] === 'outros_lotes') return; // formado de outros lotes: a origem fica
+          setOrigem(v);
+        }}
+      />
+      {id && origem[0] === 'outros_lotes' && <Text style={[estilos.nota, { textAlign: 'left' }]}>Formado de outros lotes (a troca está em Pecuário › Movimentações).</Text>}
+      {!id && outrosLotes && (
+        <View style={estilos.caixa}>
+          <Text style={estilos.caixaTitulo}>De onde vêm os animais</Text>
+          <Escolha
+            rotulo="Sexo do lote *"
+            opcoes={SEXOS.map((s) => ({ valor: s.valor, rotulo: s.valor === 'M' ? 'Machos' : 'Fêmeas' }))}
+            valor={sexo}
+            aoMudar={(v) => {
+              setSexo(v);
+              setCategoria([]);
+              setFontes([novaFonte()]);
+              setDicas({});
+            }}
+            erro={erros.sexo}
+          />
+          {sexoLote &&
+            fontes.map((f, i) => (
+              <View key={f.chave} style={estilos.linha}>
+                <View style={{ flex: 1 }}>
+                  <SeletorLista
+                    rotulo={i === 0 ? 'Lote de origem *' : `Origem ${i + 1} *`}
+                    valorId={f.loteId}
+                    aoMudar={(v) => setFontes((ant) => ant.map((x) => (x.chave === f.chave ? { ...x, loteId: v } : x)))}
+                    carregar={carregarFontes}
+                    erro={erros[`fonte${i}`]}
+                    vazio={`Nenhum lote com ${sexoLote === 'M' ? 'machos' : 'fêmeas'} nesta fazenda.`}
+                  />
+                </View>
+                <View style={{ width: 90 }}>
+                  <Campo
+                    rotulo="Cabeças"
+                    value={f.qtd}
+                    onChangeText={(t) => setFontes((ant) => ant.map((x) => (x.chave === f.chave ? { ...x, qtd: t.replace(/\D/g, '').slice(0, 4) } : x)))}
+                    keyboardType="number-pad"
+                    placeholder="Qtde."
+                  />
+                </View>
+                {fontes.length > 1 && (
+                  <Text style={[estilos.link, { paddingTop: 34 }]} onPress={() => setFontes((ant) => ant.filter((x) => x.chave !== f.chave))}>
+                    ✕
+                  </Text>
+                )}
+              </View>
+            ))}
+          {sexoLote && (
+            <Text style={estilos.link} onPress={() => setFontes((ant) => [...ant, novaFonte()])}>
+              + Mais uma origem (outro lote ou o rebanho individual)
+            </Text>
+          )}
+          {qtdFontes > 0 && <Text style={estilos.cab}>Total do lote novo: {formatarNumero(qtdFontes)} {qtdFontes === 1 ? 'cabeça' : 'cabeças'}</Text>}
+        </View>
+      )}
       {origem[0] === 'cria' && <Text style={[estilos.nota, { textAlign: 'left' }]}>Crias da fazenda.</Text>}
       {origem[0] === 'parceria' && (
         <Escolha rotulo="Tipo de parceria *" opcoes={PARCERIAS} valor={parceria} aoMudar={setParceria} erro={erros.parceria} />
@@ -549,7 +883,65 @@ export default function LoteForm() {
         <Campo rotulo="Qual origem? *" value={origemOutra} onChangeText={setOrigemOutra} autoCapitalize="sentences" erro={erros.origemOutra} />
       )}
 
+      {/* ----- animais do lote: sexo, quantidade e relação (V200) ----- */}
+      <Secao titulo="Animais do lote" />
+      {!id && outrosLotes ? null : sexoTravado ? (
+        <Text style={estilos.travado}>
+          Sexo: {sexoAtual === 'M' ? 'machos' : 'fêmeas'}. Não pode mudar com animais no lote.
+        </Text>
+      ) : (
+        <Escolha rotulo="Sexo *" opcoes={SEXOS.map((s) => ({ valor: s.valor, rotulo: s.valor === 'M' ? 'Machos' : 'Fêmeas' }))} valor={sexo} aoMudar={(v) => { setSexo(v); setCategoria([]); }} erro={erros.sexo} />
+      )}
+      {!id && !outrosLotes && (
+        <Campo
+          rotulo="Quantidade de cabeças *"
+          value={quantidade}
+          onChangeText={(t) => setQuantidade(t.replace(/\D/g, '').slice(0, 4))}
+          keyboardType="number-pad"
+          placeholder="Ex.: 50"
+          ajuda="Cada cabeça recebe um número interno. Deixe 0 para abrir o lote vazio."
+          erro={erros.quantidade}
+        />
+      )}
+      {/* ----- controle individual (V200) ----- */}
+      <Escolha
+        rotulo="Controle individual (brinco e ferro de cada animal)"
+        opcoes={SIM_NAO}
+        valor={individual}
+        aoMudar={(v) => v.length && setIndividual(v)}
+      />
+      {ind && (
+        <View style={{ gap: 8 }}>
+          {id && <CampoData rotulo="Data do peso" valor={dataPeso} aoMudar={setDataPeso} erro={erros.dataPeso} />}
+          {linhasGrade.length === 0 ? (
+            <Text style={[estilos.nota, { textAlign: 'left' }]}>
+              {id ? 'Nenhum animal ativo neste lote.' : outrosLotes ? 'Escolha as origens e as cabeças: abre uma linha para cada animal.' : 'Informe a quantidade de cabeças: abre uma linha para cada animal.'}
+            </Text>
+          ) : (
+            <>
+              <Text style={[estilos.nota, { textAlign: 'left' }]}>
+                {outrosLotes && !id
+                  ? 'Brinco que já existe: o animal certo sai do lote de origem. Brinco novo: vai para um animal sem brinco daquele lote. Linha em branco: o sistema escolhe.'
+                  : 'Brinco, ferro e peso são opcionais em cada linha; o peso entra no histórico do animal.'}
+              </Text>
+              <GradeIndividual grupos={grupos} ferros={ferros} ferroPadrao={id ? 'Sem ferro' : outrosLotes ? 'O mesmo' : 'Do lote'} aoMudar={mudarLinha} aoSairBrinco={verificarBrinco} />
+              {resumoPesos && (
+                <Text style={estilos.travado}>
+                  {formatarNumero(resumoPesos.pesados)} de {formatarNumero(id ? cabecas : qtdNova)} pesados · médio {formatarNumero(resumoPesos.medio, 2)} kg
+                  {pesoMexido ? (id ? ' → Peso Bruto Parcial' : ' → Peso Bruto Inicial') : ''}
+                </Text>
+              )}
+              {(id ? cabecas : qtdNova) > MAX_INDIVIDUAL && (
+                <Text style={estilos.travado}>A lista mostra os primeiros {formatarNumero(MAX_INDIVIDUAL)} animais.</Text>
+              )}
+            </>
+          )}
+          {erros.grade && <Aviso tipo="erro" texto={erros.grade} />}
+        </View>
+      )}
+
       {/* ----- pesos e condição ----- */}
+      <Secao titulo="Pesos e condição" />
       <PesoTotalMedio
         titulo="Peso Bruto Inicial (kg)"
         total={pesoIniTotal}
@@ -575,29 +967,11 @@ export default function LoteForm() {
 
       <Secao titulo="Composição" />
       <Campo rotulo="Descrição" value={descricao} onChangeText={setDescricao} autoCapitalize="sentences" placeholder="Ex.: Garrotes de recria, Vacas paridas" />
-      {sexoTravado ? (
-        <Text style={estilos.travado}>
-          Sexo: {sexoAtual === 'M' ? 'machos' : 'fêmeas'}. Não pode mudar com animais no lote.
-        </Text>
-      ) : (
-        <Escolha rotulo="Sexo *" opcoes={SEXOS.map((s) => ({ valor: s.valor, rotulo: s.valor === 'M' ? 'Machos' : 'Fêmeas' }))} valor={sexo} aoMudar={(v) => { setSexo(v); setCategoria([]); }} erro={erros.sexo} />
-      )}
       {sexoAtual && (
         <Escolha rotulo="Categoria" opcoes={CATEGORIAS[sexoAtual].map((c) => ({ valor: c, rotulo: c }))} valor={categoria} aoMudar={setCategoria} />
       )}
-      {!id && (
-        <Campo
-          rotulo="Quantidade de cabeças *"
-          value={quantidade}
-          onChangeText={(t) => setQuantidade(t.replace(/\D/g, '').slice(0, 4))}
-          keyboardType="number-pad"
-          placeholder="Ex.: 50"
-          ajuda="Cada cabeça recebe um número interno. Deixe 0 para abrir o lote vazio."
-          erro={erros.quantidade}
-        />
-      )}
       <CampoRaca valorId={racaId} aoMudar={setRacaId} />
-      <CampoNascimento rotulo={!id && Number(quantidade || 0) > 0 ? 'Idade *' : 'Idade'} valor={nasc} aoMudar={setNasc} baseIso={baseIso} erro={erros.nasc} />
+      <CampoNascimento rotulo={!id && !outrosLotes && Number(quantidade || 0) > 0 ? 'Idade *' : 'Idade'} valor={nasc} aoMudar={setNasc} baseIso={baseIso} erro={erros.nasc} sexo={sexo[0] === 'M' || sexo[0] === 'F' ? sexo[0] : null} />
       <CampoFerro valorId={ferroId} aoMudar={setFerroId} />
 
       <Secao titulo="Proprietário e local" />
@@ -749,4 +1123,6 @@ const estilos = StyleSheet.create({
   cab: { fontSize: tam.subtitulo, fontWeight: '700', color: cores.cafe },
   travado: { fontSize: tam.pequeno + 1, color: cores.textoSuave, fontWeight: '600' },
   nota: { fontSize: tam.pequeno, color: cores.textoSuave, textAlign: 'center' },
+  caixa: { gap: 10, padding: 12, borderRadius: tam.raio, borderWidth: 1, borderColor: cores.borda, backgroundColor: cores.cartao },
+  caixaTitulo: { fontSize: tam.pequeno + 1, fontWeight: '700', color: cores.primariaEscura },
 });

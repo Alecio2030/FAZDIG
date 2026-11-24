@@ -4,8 +4,12 @@ export const PERFIS = [
   { valor: 'gerente', rotulo: 'Gerente' },
   { valor: 'escritorio', rotulo: 'Escritório' },
   { valor: 'funcionario', rotulo: 'Funcionário' },
+  { valor: 'vaqueiro', rotulo: 'Vaqueiro' },
   { valor: 'admin', rotulo: 'Administrador' },
 ];
+
+/** V184: o Vaqueiro entra só no Modo Vaqueiro (consulta e lançamentos do campo, funciona sem sinal). */
+export const eVaqueiro = (perfil: string | null | undefined) => perfil === 'vaqueiro';
 
 /** Só o administrador do sistema vê e usa: cadastra o Produtor (dono), que depois libera os demais. */
 export const PERFIS_ADMIN_SISTEMA = [{ valor: 'dono', rotulo: 'Produtor (dono)' }, ...PERFIS];
@@ -34,7 +38,7 @@ export const NIVEIS = [
   { valor: 'completo', rotulo: 'Completo' },
   { valor: 'lancamento', rotulo: 'Só lançamentos' },
 ];
-export const ROTULO_PERFIL: Record<string, string> = { dono: 'Produtor (dono)', admin: 'Administrador', gerente: 'Gerente', escritorio: 'Escritório', funcionario: 'Funcionário' };
+export const ROTULO_PERFIL: Record<string, string> = { dono: 'Produtor (dono)', admin: 'Administrador', gerente: 'Gerente', escritorio: 'Escritório', funcionario: 'Funcionário', vaqueiro: 'Vaqueiro' };
 export const ROTULO_NIVEL: Record<string, string> = { completo: 'acesso completo', lancamento: 'só lançamentos' };
 
 export type LinhaAcesso = {

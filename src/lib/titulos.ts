@@ -4,7 +4,7 @@ import { formatarMoeda } from './formatos';
 import { diasEntre } from './reproducao';
 
 export const CAMPOS_TITULO =
-  'id, numero, tipo, descricao, documento, valor, valor_pago, situacao, data_emissao, data_vencimento, vencimento_original, previsto, agendado_para, parcela, total_parcelas, compra_id, venda_id, colheita_id, fech_colheita_id, vale_colheita_id, cafe_secagem_id, cafe_pilagem_id, cafe_movimento_id, recorrencia_id, competencia, abertura, fazenda_id, pessoa:pessoas ( nome )';
+  'id, numero, tipo, descricao, documento, valor, valor_pago, situacao, data_emissao, data_vencimento, vencimento_original, previsto, agendado_para, parcela, total_parcelas, intermediaria, compra_id, venda_id, colheita_id, fech_colheita_id, vale_colheita_id, cafe_secagem_id, cafe_pilagem_id, cafe_movimento_id, recorrencia_id, competencia, abertura, fazenda_id, pessoa:pessoas ( nome )';
 
 export type Titulo = {
   id: string;
@@ -23,6 +23,8 @@ export type Titulo = {
   agendado_para: string | null;
   parcela: number;
   total_parcelas: number;
+  /** V170: parcela intermediária (série própria: intermediária 2/5) */
+  intermediaria?: boolean;
   compra_id: string | null;
   venda_id?: string | null;
   colheita_id?: string | null;
@@ -86,11 +88,17 @@ export function textoPrazo(t: { situacao: string; data_vencimento: string; tipo?
   return d === -1 ? 'Vence amanhã' : `Vence em ${-d} dias`;
 }
 
+/** V170: "parcela 7/36" ou "intermediária 2/5" (vazio se for parcela única). */
+export function textoParcela(t: { parcela?: number | null; total_parcelas?: number | null; intermediaria?: boolean | null }): string {
+  if (t.intermediaria) return `intermediária ${t.parcela ?? 1}/${t.total_parcelas ?? 1}`;
+  return Number(t.total_parcelas) > 1 ? `parcela ${t.parcela}/${t.total_parcelas}` : '';
+}
+
 /** Linhas de detalhe de um título numa lista. */
 export function linhasTitulo(t: Titulo): (string | null)[] {
   return [
     [um(t.pessoa)?.nome, t.documento ? `Doc. ${t.documento}` : null].filter(Boolean).join(' · ') || null,
-    `${doBanco(t.data_vencimento)} · ${textoPrazo(t)}${t.total_parcelas > 1 ? ` · parcela ${t.parcela}/${t.total_parcelas}` : ''}`,
+    `${doBanco(t.data_vencimento)} · ${textoPrazo(t)}${textoParcela(t) ? ` · ${textoParcela(t)}` : ''}`,
     [
       t.abertura ? 'Saldo de abertura (Patrimônio Líquido)' : null,
       t.previsto ? 'Valor previsto (conta contínua)' : null,

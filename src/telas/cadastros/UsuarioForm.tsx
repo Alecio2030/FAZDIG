@@ -97,12 +97,12 @@ export default function UsuarioForm() {
   // Sugestão pelo perfil: gerente abre a agenda da fazenda dele; escritório, a do Escritório e as de todas as fazendas; funcionário, nenhuma.
   useEffect(() => {
     if (agendasMexidas) return;
-    setAgendas(perfil[0] === 'gerente' ? ['sua'] : perfil[0] === 'escritorio' ? ['escritorio', 'todas'] : []);
+    setAgendas(perfil[0] === 'gerente' || perfil[0] === 'vaqueiro' ? ['sua'] : perfil[0] === 'escritorio' ? ['escritorio', 'todas'] : []);
   }, [perfil, agendasMexidas]);
   // Módulos: gerente e escritório abrem todos; funcionário, os do campo (sem os cadastros do Mais).
   useEffect(() => {
     if (modulosMexidos) return;
-    setModulos(perfil[0] === 'funcionario' ? ['pecuario', 'agricola', 'frota'] : TODOS_MODULOS);
+    setModulos(perfil[0] === 'vaqueiro' ? ['pecuario'] : perfil[0] === 'funcionario' ? ['pecuario', 'agricola', 'frota'] : TODOS_MODULOS);
   }, [perfil, modulosMexidos]);
 
   function marcarAgenda(chave: string, marcado: boolean) {
@@ -291,6 +291,10 @@ export default function UsuarioForm() {
       <Escolha rotulo="Perfil" opcoes={adminSistema ? PERFIS_ADMIN_SISTEMA : PERFIS} valor={perfil} aoMudar={mudarPerfil} />
       {dono ? (
         <Text style={estilos.nota}>Produtor (dono): dono de todas as fazendas, inclusive as que forem cadastradas depois. Vê e faz tudo, abre a agenda do Produtor e libera e bloqueia os acessos do escritório, dos gerentes e dos funcionários.</Text>
+      ) : perfil[0] === 'vaqueiro' ? (
+        <Text style={estilos.nota}>
+          Vaqueiro: entra só no Modo Vaqueiro, feito para o celular no campo e que funciona sem sinal. Consulta lotes, animais e mangas, faz a contagem, a vistoria das mangas e cumpre as tarefas da agenda da fazenda. O que ele lança fica pendente até o gerente conferir (Pecuário › Conferir o campo). Não vê o financeiro.
+        </Text>
       ) : admin ? (
         <Text style={estilos.nota}>Administrador: vê e faz tudo nas fazendas marcadas, como o dono. Libera e bloqueia acessos, vê o Financeiro, consulta a Auditoria (quem lançou) e faz a cópia de segurança. Abre também a agenda do Produtor.</Text>
       ) : (
@@ -307,7 +311,7 @@ export default function UsuarioForm() {
         </>
       )}
 
-      {liberado && !admin && (
+      {liberado && !admin && perfil[0] !== 'vaqueiro' && (
         <>
           {/* V127: caixinhas do que a pessoa pode abrir, marcadas pelo Produtor ou pelo Administrador */}
           <Secao titulo="Agendas" />

@@ -22,6 +22,9 @@ import Mais from '../telas/Mais';
 import EmConstrucao from '../telas/EmConstrucao';
 import Agenda from '../telas/Agenda';
 import Capa from '../telas/Capa';
+import ModoVaqueiro from '../telas/vaqueiro/ModoVaqueiro';
+import CampoConferir from '../telas/rebanho/CampoConferir';
+import { eVaqueiro } from '../lib/acessos';
 import TitulosSemana from '../telas/financeiro/TitulosSemana';
 import PessoaForm from '../telas/cadastros/PessoaForm';
 import FazendaForm from '../telas/cadastros/FazendaForm';
@@ -29,15 +32,19 @@ import ProdutorForm from '../telas/cadastros/ProdutorForm';
 import UsuarioForm from '../telas/cadastros/UsuarioForm';
 import ContaForm from '../telas/financeiro/ContaForm';
 import InsumoForm from '../telas/agricola/InsumoForm';
+import EstoqueInsumos from '../telas/agricola/EstoqueInsumos';
+import EstoqueDetalhe from '../telas/agricola/EstoqueDetalhe';
 import ContaBancariaForm from '../telas/financeiro/ContaBancariaForm';
 import CentroForm from '../telas/financeiro/CentroForm';
 import AreaForm from '../telas/cadastros/AreaForm';
 import MangaDetalhe from '../telas/cadastros/MangaDetalhe';
+import CapinsForm from '../telas/cadastros/CapinsForm';
 import VisaoPasto from '../telas/cadastros/VisaoPasto';
 import CompraForm from '../telas/financeiro/CompraForm';
 import CompraDetalhe from '../telas/financeiro/CompraDetalhe';
 import TituloForm from '../telas/financeiro/TituloForm';
 import TituloBaixa from '../telas/financeiro/TituloBaixa';
+import PagamentoBanco from '../telas/financeiro/PagamentoBanco';
 import TituloDetalhe from '../telas/financeiro/TituloDetalhe';
 import VendaForm from '../telas/financeiro/VendaForm';
 import VendaDetalhe from '../telas/financeiro/VendaDetalhe';
@@ -45,6 +52,12 @@ import ImobilizadoForm from '../telas/financeiro/ImobilizadoForm';
 import FinanciamentoForm from '../telas/financeiro/FinanciamentoForm';
 import RelatorioCaixa from '../telas/financeiro/RelatorioCaixa';
 import RelatorioResultado from '../telas/financeiro/RelatorioResultado';
+import Balancete from '../telas/financeiro/Balancete';
+import LancamentosConta from '../telas/financeiro/LancamentosConta';
+import RazaoConta from '../telas/financeiro/RazaoConta';
+import Parametros from '../telas/financeiro/Parametros';
+import FechamentoMes from '../telas/financeiro/FechamentoMes';
+import TratoDia from '../telas/rebanho/TratoDia';
 import ExportarContabilidade from '../telas/financeiro/ExportarContabilidade';
 import TipoLancamentoForm from '../telas/financeiro/TipoLancamentoForm';
 import ImobilizadoDetalhe from '../telas/financeiro/ImobilizadoDetalhe';
@@ -54,6 +67,8 @@ import TalhaoForm from '../telas/agricola/TalhaoForm';
 import TalhaoDetalhe from '../telas/agricola/TalhaoDetalhe';
 import AnaliseForm from '../telas/agricola/AnaliseForm';
 import AnaliseDetalhe from '../telas/agricola/AnaliseDetalhe';
+import LaudoForm from '../telas/agricola/LaudoForm';
+import LaudoInsumoDetalhe from '../telas/agricola/LaudoInsumoDetalhe';
 import AtividadeForm from '../telas/agricola/AtividadeForm';
 import AtividadeDetalhe from '../telas/agricola/AtividadeDetalhe';
 import SafraForm from '../telas/agricola/SafraForm';
@@ -81,6 +96,8 @@ import ConsultaAnimal from '../telas/rebanho/ConsultaAnimal';
 import LoteForm from '../telas/rebanho/LoteForm';
 import MovimentacaoForm from '../telas/rebanho/MovimentacaoForm';
 import MovimentacaoDetalhe from '../telas/rebanho/MovimentacaoDetalhe';
+import GtaForm from '../telas/rebanho/GtaForm';
+import EstoqueFiscal from '../telas/rebanho/EstoqueFiscal';
 import PesagemForm from '../telas/rebanho/PesagemForm';
 import PesagemDetalhe from '../telas/rebanho/PesagemDetalhe';
 import LoteDetalhe from '../telas/rebanho/LoteDetalhe';
@@ -102,6 +119,10 @@ import FrotaRelatorio from '../telas/frota/FrotaRelatorio';
 import FreteForm from '../telas/frota/FreteForm';
 import RegistroLancamentos from '../telas/RegistroLancamentos';
 import CopiaSeguranca from '../telas/CopiaSeguranca';
+import NotaFiscalConfig from '../telas/NotaFiscalConfig';
+import NotaFiscalEmitir from '../telas/financeiro/NotaFiscalEmitir';
+import NotaFiscalDetalhe from '../telas/financeiro/NotaFiscalDetalhe';
+import NotasFiscais from '../telas/financeiro/NotasFiscais';
 
 const Pilha = createNativeStackNavigator<PilhaParams>();
 
@@ -245,6 +266,9 @@ export default function Navegacao() {
           </>
         ) : fazendas.length === 0 ? (
           <Pilha.Screen name="PrimeiroAcesso" component={P(PrimeiroAcesso)} options={{ headerShown: false }} />
+        ) : fazendas.every((f) => eVaqueiro(f.perfil)) ? (
+          // V184: o vaqueiro entra só no Modo Vaqueiro (funciona sem sinal)
+          <Pilha.Screen name="ModoVaqueiro" component={P(ModoVaqueiro)} options={{ headerShown: false }} />
         ) : (
           <>
             <Pilha.Screen name="Capa" component={P(Capa)} options={{ headerShown: false }} />
@@ -258,10 +282,13 @@ export default function Navegacao() {
             <Pilha.Screen name="UsuarioForm" component={P(UsuarioForm)} options={{ title: 'Usuários e acessos' }} />
             <Pilha.Screen name="ContaForm" component={P(ContaForm)} options={{ title: 'Conta' }} />
             <Pilha.Screen name="InsumoForm" component={P(InsumoForm)} options={{ title: 'Insumo' }} />
+            <Pilha.Screen name="EstoqueInsumos" component={P(EstoqueInsumos)} options={{ title: 'Estoque' }} />
+            <Pilha.Screen name="EstoqueDetalhe" component={P(EstoqueDetalhe)} options={{ title: 'Estoque do produto' }} />
             <Pilha.Screen name="ContaBancariaForm" component={P(ContaBancariaForm)} options={{ title: 'Bancos e caixa' }} />
             <Pilha.Screen name="CentroForm" component={P(CentroForm)} options={{ title: 'Centro de custo' }} />
             <Pilha.Screen name="AreaForm" component={P(AreaForm)} />
             <Pilha.Screen name="MangaDetalhe" component={P(MangaDetalhe)} options={{ title: 'Manga' }} />
+            <Pilha.Screen name="Capins" component={P(CapinsForm)} options={{ title: 'Capins (estimativa das mangas)' }} />
             <Pilha.Screen name="VisaoPasto" component={P(VisaoPasto)} options={{ title: 'Visão do Pasto' }} />
             <Pilha.Screen name="CompraForm" component={P(CompraForm)} options={{ title: 'Compras' }} />
             <Pilha.Screen name="CompraDetalhe" component={P(CompraDetalhe)} options={{ title: 'Compra' }} />
@@ -269,11 +296,18 @@ export default function Navegacao() {
             <Pilha.Screen name="VendaForm" component={P(VendaForm)} options={{ title: 'Vendas' }} />
             <Pilha.Screen name="VendaDetalhe" component={P(VendaDetalhe)} options={{ title: 'Venda' }} />
             <Pilha.Screen name="TituloBaixa" component={P(TituloBaixa)} options={{ title: 'Título' }} />
+            <Pilha.Screen name="PagamentoBanco" component={P(PagamentoBanco)} options={{ title: 'Pagar pelo banco' }} />
             <Pilha.Screen name="TituloDetalhe" component={P(TituloDetalhe)} options={{ title: 'Título' }} />
             <Pilha.Screen name="ImobilizadoForm" component={P(ImobilizadoForm)} options={{ title: 'Imobilizado' }} />
             <Pilha.Screen name="FinanciamentoForm" component={P(FinanciamentoForm)} options={{ title: 'Financiamentos' }} />
             <Pilha.Screen name="RelatorioCaixa" component={P(RelatorioCaixa)} options={{ title: 'Extrato e fluxo de caixa' }} />
             <Pilha.Screen name="RelatorioResultado" component={P(RelatorioResultado)} options={{ title: 'Resultado da atividade' }} />
+            <Pilha.Screen name="Balancete" component={P(Balancete)} options={{ title: 'Balancete' }} />
+            <Pilha.Screen name="LancamentosConta" component={P(LancamentosConta)} options={{ title: 'Lançamentos da conta' }} />
+            <Pilha.Screen name="RazaoConta" component={P(RazaoConta)} options={{ title: 'Razão da conta' }} />
+            <Pilha.Screen name="Parametros" component={P(Parametros)} options={{ title: 'Parâmetros' }} />
+            <Pilha.Screen name="FechamentoMes" component={P(FechamentoMes)} options={{ title: 'Fechamento do mês' }} />
+            <Pilha.Screen name="TratoDia" component={P(TratoDia)} options={{ title: 'Trato do dia' }} />
             <Pilha.Screen name="ExportarContabilidade" component={P(ExportarContabilidade)} options={{ title: 'Exportar para a contabilidade' }} />
             <Pilha.Screen name="TipoLancamentoForm" component={P(TipoLancamentoForm)} options={{ title: 'Tipos de despesa e receita' }} />
             <Pilha.Screen name="ImobilizadoDetalhe" component={P(ImobilizadoDetalhe)} options={{ title: 'Bem' }} />
@@ -283,6 +317,8 @@ export default function Navegacao() {
             <Pilha.Screen name="TalhaoDetalhe" component={P(TalhaoDetalhe)} options={{ title: 'Talhão' }} />
             <Pilha.Screen name="AnaliseForm" component={P(AnaliseForm)} options={{ title: 'Análise' }} />
             <Pilha.Screen name="AnaliseDetalhe" component={P(AnaliseDetalhe)} options={{ title: 'Análise' }} />
+            <Pilha.Screen name="LaudoForm" component={P(LaudoForm)} options={{ title: 'Análises e laudos' }} />
+            <Pilha.Screen name="LaudoInsumoDetalhe" component={P(LaudoInsumoDetalhe)} options={{ title: 'Laudo' }} />
             <Pilha.Screen name="AtividadeForm" component={P(AtividadeForm)} options={{ title: 'Atividades' }} />
             <Pilha.Screen name="AtividadeDetalhe" component={P(AtividadeDetalhe)} options={{ title: 'Atividade' }} />
             <Pilha.Screen name="SafraForm" component={P(SafraForm)} options={{ title: 'Safras' }} />
@@ -311,6 +347,9 @@ export default function Navegacao() {
             <Pilha.Screen name="LoteDetalhe" component={P(LoteDetalhe)} options={{ title: 'Lote' }} />
             <Pilha.Screen name="MovimentacaoForm" component={P(MovimentacaoForm)} options={{ title: 'Movimentações' }} />
             <Pilha.Screen name="MovimentacaoDetalhe" component={P(MovimentacaoDetalhe)} options={{ title: 'Movimentação' }} />
+            <Pilha.Screen name="GtaForm" component={P(GtaForm)} options={{ title: 'GTA' }} />
+            <Pilha.Screen name="EstoqueFiscal" component={P(EstoqueFiscal)} options={{ title: 'Estoque de gado' }} />
+            <Pilha.Screen name="CampoConferir" component={P(CampoConferir)} options={{ title: 'Conferir o campo' }} />
             <Pilha.Screen name="PesagemForm" component={P(PesagemForm)} options={{ title: 'Pesagens' }} />
             <Pilha.Screen name="PesagemDetalhe" component={P(PesagemDetalhe)} options={{ title: 'Pesagem' }} />
             <Pilha.Screen name="SanidadeForm" component={P(SanidadeForm)} options={{ title: 'Sanidade' }} />
@@ -325,6 +364,10 @@ export default function Navegacao() {
             <Pilha.Screen name="FreteForm" component={P(FreteForm)} options={{ title: 'Fretes' }} />
             <Pilha.Screen name="RegistroLancamentos" component={P(RegistroLancamentos)} options={{ title: 'Auditoria' }} />
             <Pilha.Screen name="CopiaSeguranca" component={P(CopiaSeguranca)} options={{ title: 'Cópia de segurança' }} />
+            <Pilha.Screen name="NotaFiscalConfig" component={P(NotaFiscalConfig)} options={{ title: 'Nota fiscal (NF-e)' }} />
+            <Pilha.Screen name="NotaFiscalEmitir" component={P(NotaFiscalEmitir)} options={{ title: 'Emitir NF-e' }} />
+            <Pilha.Screen name="NotaFiscalDetalhe" component={P(NotaFiscalDetalhe)} options={{ title: 'Nota fiscal' }} />
+            <Pilha.Screen name="NotasFiscais" component={P(NotasFiscais)} options={{ title: 'Notas fiscais emitidas' }} />
             <Pilha.Screen name="DietaForm" component={P(DietaForm)} options={{ title: 'Dietas' }} />
             <Pilha.Screen name="DietaDetalhe" component={P(DietaDetalhe)} options={{ title: 'Dieta' }} />
             <Pilha.Screen name="AlimentoForm" component={P(AlimentoForm)} options={{ title: 'Alimentos' }} />

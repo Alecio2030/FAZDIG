@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import Tela from '../../componentes/Tela';
@@ -13,6 +13,8 @@ import { formatarNumero, lerNumero, numeroParaCampo } from '../../lib/formatos';
 import { abrirFotoDocumento, pedirParecer } from '../../lib/documentos';
 import { densidadeTalhao, idadeFase } from '../../lib/talhoes';
 import { EPOCAS_FOLIAR, adubacaoNK, calagem, classeFoliar, completarSolo, eConilon, parametrosDe, type Valores } from '../../lib/agronomia';
+import { AVISO_SUGESTAO, diagnosticoFoliar, diagnosticoSolo, prntDoLaudo } from '../../lib/diagnostico';
+import QuadroDiagnostico from '../../componentes/QuadroDiagnostico';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -31,8 +33,18 @@ export default function AnaliseDetalhe() {
   const [modo, setModo] = useState<string[]>(['cobertura']);
   const [prod, setProd] = useState('');
   const [pedindo, setPedindo] = useState(false);
+  // V167: o parecer novo fica na tela até a pessoa escolher gravar ou descartar
+  const [parecerNovo, setParecerNovo] = useState<any>(null);
+  const [gravandoParecer, setGravandoParecer] = useState(false);
+  const [segundos, setSegundos] = useState(0);
+  const relogio = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => {
+    if (relogio.current) clearInterval(relogio.current);
+  }, []);
   const [erro, setErro] = useState<string | null>(null);
   const [planos, setPlanos] = useState<any[]>([]);
+  // V166: PRNT do último laudo de calcário lançado (Análises e laudos)
+  const [prntLaudo, setPrntLaudo] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: a ? `Análise ${a.tipo === 'foliar' ? 'foliar' : 'de solo'}` : 'Análise' });
@@ -50,6 +62,16 @@ export default function AnaliseDetalhe() {
           const util = Number(ta.area_util_ha ?? ta.area_ha ?? 0);
           setProd((atual) => atual || (Number(ta.previsao_sacas) > 0 && util > 0 ? numeroParaCampo(Math.round(Number(ta.previsao_sacas) / util)) : ''));
           setModo([ta.data_plantio ? 'cobertura' : 'incorporado']);
+          if (an.tipo === 'solo') {
+            const { data: lc } = await supabase.from('laudos_insumo').select('dados, data, insumo:insumos ( nome )').eq('tipo', 'corretivo').order('data', { ascending: false }).limit(1);
+            const l = (lc as any[] | null)?.[0];
+            const pr = l ? prntDoLaudo(l.dados ?? {}) : null;
+            if (pr) {
+              const nomeIns = Array.isArray(l.insumo) ? l.insumo[0]?.nome : l.insumo?.nome;
+              setPrntLaudo(`PRNT do último laudo de calcário${nomeIns ? ` (${nomeIns})` : ''}, de ${doBanco(l.data)}.`);
+              setPrnt((atual) => (atual === '85' ? numeroParaCampo(Math.round(pr * 10) / 10) : atual));
+            }
+          }
         } catch (e) {
           setErro(traduzirErro(e));
         }
@@ -75,6 +97,12 @@ export default function AnaliseDetalhe() {
   const epoca = EPOCAS_FOLIAR.find((e) => e.valor === a.epoca)?.rotulo;
   const relCaMg = solo && valores.ca != null && valores.mg > 0 ? valores.ca / valores.mg : null;
   const parecer = a.parecer as any;
+  const mostrado = parecerNovo ?? parecer;
+  // V166: o que está fora do padrão, com as sugestões (conta do sistema, sem IA)
+  const diag = solo
+    ? diagnosticoSolo(valores, cal, nk?.k2o ?? null)
+    : diagnosticoFoliar(valores, (ch) => (conilon ? classeFoliar(ch, 0, a.epoca)?.faixa ?? null : null), a.referencias);
+  const achado = (ch: string) => diag.achados.find((x) => x.chave === ch);
 
   async function pedir() {
     setErro(null);
@@ -90,21 +118,33 @@ export default function AnaliseDetalhe() {
         altitude_m: t.altitude_m,
         produtividade_esperada_sc_ha: lerNumero(prod),
       },
-      analise: { tipo: a.tipo, data: a.data, profundidade: a.profundidade, epoca_coleta: epoca ?? null, valores, calculados_pelo_sistema: calculados, unidades: Object.fromEntries(lista.map((p) => [p.chave, p.unidade || 'sem unidade'])) },
+      analise: { referencias_do_laboratorio: a.referencias ?? null, fora_do_padrao_pelo_sistema: diag.achados.filter((x) => x.nivel !== 'ok').map((x) => `${x.rotulo}: ${x.classe}${x.faixa ? ` (${x.faixa})` : ''}`), tipo: a.tipo, data: a.data, profundidade: a.profundidade, epoca_coleta: epoca ?? null, valores, calculados_pelo_sistema: calculados, unidades: Object.fromEntries(lista.map((p) => [p.chave, p.unidade || 'sem unidade'])) },
       calculo: {
         calagem: cal ? { saturacao_esperada_Ve: cal.ve, classe_da_CTC: cal.classeT, NC_t_ha_PRNT100_incorporado: cal.nc, dose_t_ha: cal.dose, PRNT_do_calcario: cal.prnt, aplicacao: cal.cobertura ? 'em cobertura (metade da dose)' : 'incorporado a 20 cm' } : null,
         adubacao_producao: nk ? { faixa_produtividade_sc_ha: nk.faixa, N_kg_ha_ano: nk.n, K2O_kg_ha_ano: nk.k2o, classe_K_solo: nk.classeK, N_g_planta_ano: nk.nPlanta, K2O_g_planta_ano: nk.k2oPlanta } : null,
         relacao_Ca_Mg: relCaMg ? Number(relCaMg.toFixed(1)) : null,
-        classes_foliares: !solo ? Object.fromEntries(lista.map((p) => [p.chave, classeFoliar(p.chave, valores[p.chave], a.epoca)?.classe ?? 'sem faixa de referência para esta época'])) : null,
+        classes_pelo_sistema: Object.fromEntries(diag.achados.map((x) => [x.chave, `${x.classe}${x.faixa ? ` (${x.faixa}; ${x.fonte})` : ''}`])),
       },
     };
+    setSegundos(0);
+    if (relogio.current) clearInterval(relogio.current);
+    relogio.current = setInterval(() => setSegundos((x) => x + 1), 1000);
     const res = await pedirParecer(contexto);
+    if (relogio.current) clearInterval(relogio.current);
     setPedindo(false);
     if ('erro' in res) return setErro(res.erro);
+    setParecerNovo(res.dados); // não grava sozinho: a pessoa escolhe
+  }
+
+  async function gravarParecer() {
+    if (!parecerNovo) return;
+    setGravandoParecer(true);
     const agora = new Date().toISOString();
-    const { error } = await supabase.from('talhao_analises').update({ parecer: res.dados, parecer_em: agora }).eq('id', a.id);
-    setA({ ...a, parecer: res.dados, parecer_em: agora });
-    if (error) setErro(`O parecer veio, mas não pôde ser guardado: ${traduzirErro(error)}`);
+    const { error } = await supabase.from('talhao_analises').update({ parecer: parecerNovo, parecer_em: agora }).eq('id', a.id);
+    setGravandoParecer(false);
+    if (error) return setErro(`O parecer não foi gravado: ${traduzirErro(error)}`);
+    setA({ ...a, parecer: parecerNovo, parecer_em: agora });
+    setParecerNovo(null);
   }
 
   return (
@@ -131,9 +171,11 @@ export default function AnaliseDetalhe() {
         </Text>
       </View>
 
+      <QuadroDiagnostico diagnostico={diag} />
+
       <Secao titulo="Resultados" />
       {lista.map((p) => {
-        const cf = !solo ? classeFoliar(p.chave, valores[p.chave], a.epoca) : null;
+        const ac = achado(p.chave);
         return (
           <View key={p.chave} style={estilos.par}>
             <Text style={estilos.parRotulo}>
@@ -144,9 +186,10 @@ export default function AnaliseDetalhe() {
               <Text style={estilos.parValor}>
                 {formatarNumero(valores[p.chave], p.casas)} {p.unidade}
               </Text>
-              {cf && (
-                <Text style={[estilos.classe, { color: cf.classe === 'adequado' ? cores.sucesso : cf.classe === 'baixo' ? cores.erro : cores.info }]}>
-                  {cf.classe === 'adequado' ? 'Adequado' : cf.classe === 'baixo' ? 'Baixo' : 'Alto'} · faixa {formatarNumero(cf.faixa[0], p.casas)} a {formatarNumero(cf.faixa[1], p.casas)}
+              {ac && ac.classe !== 'sem referência' && (
+                <Text style={[estilos.classe, { color: ac.nivel === 'ok' ? cores.sucesso : ac.nivel === 'fora' ? cores.erro : cores.cafe }]}>
+                  {ac.classe}
+                  {ac.faixa ? ` · ${ac.faixa}` : ''}
                 </Text>
               )}
             </View>
@@ -154,8 +197,12 @@ export default function AnaliseDetalhe() {
         );
       })}
       {relCaMg != null && <Text style={estilos.nota}>Relação Ca:Mg = {formatarNumero(relCaMg, 1)}:1 (para o conilon, o desejável é em torno de 4:1).</Text>}
-      {!solo && !conilon && <Text style={estilos.nota}>As faixas de referência do sistema são do café conilon; para esta cultura, veja o parecer.</Text>}
-      {!solo && conilon && a.epoca === 'outra' && <Text style={estilos.nota}>As faixas de referência são para folhas coletadas na pré-florada ou na granação: fora dessas épocas a comparação não vale.</Text>}
+      {!solo && (!conilon || a.epoca === 'outra') && (
+        <Text style={estilos.nota}>
+          {a.referencias ? 'Faixas: as do laboratório, impressas no laudo' : 'Sem faixa do sistema para esta cultura ou época, e o laudo não trouxe a coluna de valor adequado'}
+          {conilon ? ' (as do conilon do Incaper valem só para folhas da pré-florada e da granação).' : ' (as do sistema são do café conilon).'}
+        </Text>
+      )}
 
       {solo && (
         <>
@@ -184,6 +231,7 @@ export default function AnaliseDetalhe() {
                 T {formatarNumero(valores.ctc, 2)} × (Ve {cal.ve}% − V {formatarNumero(valores.v, 1)}%) ÷ 100 = <Text style={estilos.forte}>{formatarNumero(cal.nc, 2)} t/ha</Text> (PRNT 100, incorporado)
               </Text>
               <Text style={estilos.nota}>Ve de {cal.ve}% porque o solo tem {cal.classeT}.</Text>
+              {prntLaudo && <Text style={estilos.nota}>{prntLaudo}</Text>}
               {cal.precisa ? (
                 <Text style={estilos.resultado}>
                   Aplicar {formatarNumero(cal.dose, 2)} t/ha de calcário PRNT {formatarNumero(cal.prnt, 0)}%{cal.cobertura ? ' em cobertura (metade da dose)' : ', incorporado a 20 cm'}
@@ -239,13 +287,17 @@ export default function AnaliseDetalhe() {
       )}
 
       <Secao titulo="Parecer do agrônomo virtual (IA)" />
-      {parecer ? (
+      {mostrado ? (
         <View style={{ gap: 10 }}>
-          <Text style={estilos.nota}>Gerado em {doBanco(a.parecer_em)}.</Text>
-          <Text style={estilos.texto}>{parecer.resumo}</Text>
-          {(parecer.parametros ?? []).length > 0 && (
+          {parecerNovo ? (
+            <Text style={[estilos.nota, { color: cores.cafe, fontWeight: '700' }]}>Parecer novo, ainda NÃO gravado. Leia e escolha no fim: gravar ou descartar.</Text>
+          ) : (
+            <Text style={estilos.nota}>Gravado em {doBanco(a.parecer_em)}.</Text>
+          )}
+          <Text style={estilos.texto}>{mostrado.resumo}</Text>
+          {(mostrado.parametros ?? []).length > 0 && (
             <View style={estilos.quadro}>
-              {(parecer.parametros as any[]).map((p, k) => (
+              {(mostrado.parametros as any[]).map((p, k) => (
                 <View key={k} style={{ gap: 1 }}>
                   <Text style={estilos.paramNome}>
                     {p.nome}: {p.valor} · <Text style={{ color: COR_CLASSE[String(p.classe).toLowerCase()] ?? cores.texto }}>{p.classe}</Text>
@@ -255,29 +307,47 @@ export default function AnaliseDetalhe() {
               ))}
             </View>
           )}
-          <Bloco titulo="Calagem" texto={parecer.calagem} />
-          <Bloco titulo="Gessagem" texto={parecer.gessagem} />
-          <Bloco titulo="Nitrogênio" texto={parecer.adubacao?.nitrogenio} />
-          <Bloco titulo="Fósforo" texto={parecer.adubacao?.fosforo} />
-          <Bloco titulo="Potássio" texto={parecer.adubacao?.potassio} />
-          <Bloco titulo="Outros nutrientes" texto={parecer.adubacao?.outros} />
-          <Bloco titulo="Micronutrientes" texto={parecer.micronutrientes} />
-          <Bloco titulo="Parcelamento" texto={parecer.parcelamento} />
-          <Lista titulo="Atenção" itens={parecer.alertas} cor={cores.cafe} />
-          <Lista titulo="Próximos passos" itens={parecer.proximos_passos} />
-          {parecer.confianca ? <Text style={estilos.nota}>Sobre a confiança: {parecer.confianca}</Text> : null}
-          <Botao titulo="Pedir o parecer de novo" tipo="secundario" onPress={pedir} carregando={pedindo} />
+          <Bloco titulo="Calagem" texto={mostrado.calagem} />
+          <Bloco titulo="Gessagem" texto={mostrado.gessagem} />
+          <Bloco titulo="Nitrogênio" texto={mostrado.adubacao?.nitrogenio} />
+          <Bloco titulo="Fósforo" texto={mostrado.adubacao?.fosforo} />
+          <Bloco titulo="Potássio" texto={mostrado.adubacao?.potassio} />
+          <Bloco titulo="Outros nutrientes" texto={mostrado.adubacao?.outros} />
+          <Bloco titulo="Micronutrientes" texto={mostrado.micronutrientes} />
+          <Bloco titulo="Parcelamento" texto={mostrado.parcelamento} />
+          <Lista titulo="Atenção" itens={mostrado.alertas} cor={cores.cafe} />
+          <Lista titulo="Próximos passos" itens={mostrado.proximos_passos} />
+          {mostrado.confianca ? <Text style={estilos.nota}>Sobre a confiança: {mostrado.confianca}</Text> : null}
+          {parecerNovo ? (
+            <>
+              <Botao titulo="Gravar o parecer" onPress={gravarParecer} carregando={gravandoParecer} />
+              <Botao titulo="Descartar" tipo="secundario" onPress={() => setParecerNovo(null)} />
+            </>
+          ) : (
+            !pedindo && <Botao titulo="Pedir o parecer de novo" tipo="secundario" onPress={pedir} />
+          )}
         </View>
       ) : (
-        <>
-          <Text style={estilos.nota}>
-            A IA lê esta análise junto com os dados do talhão e as contas acima, classifica cada resultado e explica o que fazer (calagem, gesso, N, P, K, micronutrientes, parcelamento). Leva uns 20 segundos.
-          </Text>
-          <Botao titulo="Pedir o parecer" onPress={pedir} carregando={pedindo} />
-        </>
+        !pedindo && (
+          <>
+            <Text style={estilos.nota}>
+              Opcional. A IA lê esta análise junto com os dados do talhão e o diagnóstico acima e explica como aplicar (calagem, gesso, N, P, K, micronutrientes, parcelamento). Depois você escolhe se grava o parecer.
+            </Text>
+            <Botao titulo="Pedir o parecer" onPress={pedir} />
+          </>
+        )
       )}
+      {pedindo && (
+        <View style={estilos.quadro}>
+          <ActivityIndicator color={cores.primaria} />
+          <Text style={[estilos.nota, { textAlign: 'center' }]}>
+            O agrônomo virtual está escrevendo… {segundos}s{segundos >= 30 ? ' (pode levar até 1 minuto; não saia desta tela)' : ''}
+          </Text>
+        </View>
+      )}
+      {erro && <Aviso tipo="erro" texto={erro} />}
       <Text style={estilos.aviso}>
-        Apoio à decisão. As contas seguem as tabelas do Incaper para o café conilon no ES; o parecer é gerado por IA e pode errar. Confirme com o agrônomo responsável antes de comprar e aplicar.
+        {AVISO_SUGESTAO} As contas seguem as tabelas do Incaper para o café conilon no ES; o parecer é gerado por IA e pode errar.
       </Text>
     </Tela>
   );

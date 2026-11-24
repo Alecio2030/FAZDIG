@@ -1,15 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Campo from './Campo';
 import CampoData from './CampoData';
 import Escolha from './Escolha';
 import { dataValida, doBanco, hojeBanco, paraBanco } from '../lib/datas';
 import { idadeTexto, mesAno, mesesAtras, mesesEntre } from '../lib/rebanho';
+import { FAIXAS_IDADE, chaveFaixa, faixaDaIdade, faixaPorChave, mesesDaFaixa, nomeSexo, type Sexo } from '../lib/faixas';
 import { cores, tam } from '../tema';
 
-export type ValorNascimento = { modo: 'exata' | 'idade'; data: string; meses: string };
+export type ValorNascimento = { modo: 'exata' | 'idade' | 'faixa'; data: string; meses: string; faixa?: string };
 
 export const NASCIMENTO_VAZIO: ValorNascimento = { modo: 'idade', data: '', meses: '' };
+/** V162: entradas de gado começam pela faixa de idade (como vem na GTA e na nota). */
+export const NASCIMENTO_FAIXA: ValorNascimento = { modo: 'faixa', data: '', meses: '', faixa: '' };
 
 /** Converte o que foi digitado para gravar: data (aaaa-mm-dd) e se é aproximada. */
 export function lerNascimento(v: ValorNascimento, baseIso: string): { iso: string | null; aprox: boolean; erro?: string } {
@@ -19,6 +22,11 @@ export function lerNascimento(v: ValorNascimento, baseIso: string): { iso: strin
     const iso = paraBanco(v.data)!;
     if (iso > hojeBanco()) return { iso: null, aprox: false, erro: 'O nascimento não pode ser no futuro.' };
     return { iso, aprox: false };
+  }
+  if (v.modo === 'faixa') {
+    const f = faixaPorChave(v.faixa);
+    if (!f) return { iso: null, aprox: true };
+    return { iso: mesesAtras(baseIso, mesesDaFaixa(f)), aprox: true };
   }
   if (!v.meses.trim()) return { iso: null, aprox: false };
   const n = Number(v.meses);
@@ -41,25 +49,46 @@ type Props = {
   baseIso: string;
   erro?: string | null;
   rotuloMeses?: string;
+  /** V162: com o sexo, aparece a opção "Pela faixa" (as faixas da GTA mudam com o sexo) */
+  sexo?: Sexo | null;
 };
 
 /** Nascimento por data exata ou pela idade em meses (vira um mês de referência). */
-export default function CampoNascimento({ rotulo = 'Nascimento', valor, aoMudar, baseIso, erro, rotuloMeses = 'Idade na entrada, em meses' }: Props) {
+export default function CampoNascimento({ rotulo = 'Nascimento', valor, aoMudar, baseIso, erro, rotuloMeses = 'Idade na entrada, em meses', sexo }: Props) {
   const lido = lerNascimento(valor, baseIso);
   const idadeHoje = lido.iso ? idadeTexto(lido.iso) : null;
+  // trocou o sexo: a faixa escolhida (que é de um sexo) deixa de valer
+  useEffect(() => {
+    if (valor.modo === 'faixa' && valor.faixa && sexo && valor.faixa[0] !== sexo) aoMudar({ ...valor, faixa: '' });
+  }, [sexo, valor, aoMudar]);
+  const mesesHoje = lido.iso ? Math.max(0, mesesEntre(lido.iso, hojeBanco())) : null;
+  const faixaHoje = sexo && mesesHoje !== null ? faixaDaIdade(sexo, mesesHoje) : null;
 
   return (
     <View style={{ gap: 10 }}>
       <Escolha
         rotulo={rotulo}
         opcoes={[
+          { valor: 'faixa', rotulo: 'Pela faixa (GTA)' },
           { valor: 'idade', rotulo: 'Pela idade (meses)' },
           { valor: 'exata', rotulo: 'Data exata' },
         ]}
         valor={[valor.modo]}
         aoMudar={(v) => aoMudar({ ...valor, modo: v[0] as ValorNascimento['modo'] })}
       />
-      {valor.modo === 'exata' ? (
+      {valor.modo === 'faixa' ? (
+        sexo ? (
+          <Escolha
+            rotulo={`Faixa de idade na entrada (${nomeSexo(sexo).toLowerCase()})`}
+            opcoes={FAIXAS_IDADE[sexo].map((f) => ({ valor: chaveFaixa(f), rotulo: f.rotulo }))}
+            valor={valor.faixa ? [valor.faixa] : []}
+            aoMudar={(v) => aoMudar({ ...valor, faixa: v[0] })}
+            erro={erro}
+          />
+        ) : (
+          <Text style={[estilos.nota, { color: erro ? cores.erro : cores.textoSuave }]}>Escolha o sexo para ver as faixas de idade.</Text>
+        )
+      ) : valor.modo === 'exata' ? (
         <CampoData rotulo="Data de nascimento" valor={valor.data} aoMudar={(d) => aoMudar({ ...valor, data: d })} erro={erro ?? lido.erro} />
       ) : (
         <Campo
@@ -76,6 +105,7 @@ export default function CampoNascimento({ rotulo = 'Nascimento', valor, aoMudar,
           {lido.aprox ? `Mês de referência: ${mesAno(lido.iso)}. ` : ''}
           {idadeHoje ? `Idade hoje: ${idadeHoje}${lido.aprox ? ' (aprox.)' : ''}.` : ''}
           {lido.aprox ? ' A idade evolui sozinha a cada mês.' : ''}
+          {faixaHoje ? ` Faixa hoje: ${faixaHoje.rotulo}.` : ''}
         </Text>
       )}
     </View>

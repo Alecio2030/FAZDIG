@@ -24,3 +24,30 @@ export function calcularVendaAnimais(x: { cabecas: number; pesoBruto: number; fo
   const valor = x.preco > 0 ? (x.forma === 'arroba' ? r2v(arrobas * x.preco) : x.forma === 'kg' ? r2v(Math.max(0, pesoLiquido) * x.preco) : r2v(x.cabecas * x.preco)) : 0;
   return { barrigaKg: temBarriga ? r2v(bruto - pesoLiquido) : 0, pesoLiquido, arrobas, valor };
 }
+
+/**
+ * V203: conta de um item da venda de gado (a mesma de venda_gado_item, no banco).
+ * - barriga: % do peso bruto, ou kg por cabeça;
+ * - arrobas = peso sem a barriga ÷ kg da arroba (2 casas);
+ * - preço por arroba: arrobas × preço; por kg bruto: peso bruto × preço; por cabeça: cabeças × preço.
+ * Devolve também os preços equivalentes (por @, por kg bruto e por cabeça) para as três caixas.
+ */
+export function calcularItemGado(x: { cabecas: number; pesoBruto: number; kgArroba: number; barrigaTipo: 'perc' | 'kg_cab'; barrigaValor: number; forma: FormaPreco; preco: number }) {
+  const bruto = x.pesoBruto > 0 ? x.pesoBruto : 0;
+  const temBarriga = x.barrigaValor > 0 && bruto > 0;
+  const pesoLiquido = !temBarriga ? bruto : x.barrigaTipo === 'perc' ? r2v(bruto * (1 - x.barrigaValor / 100)) : r2v(bruto - x.barrigaValor * x.cabecas);
+  const kgArroba = x.kgArroba > 0 ? x.kgArroba : 30;
+  const arrobas = pesoLiquido > 0 ? r2v(pesoLiquido / kgArroba) : 0;
+  const valor = x.preco > 0 ? (x.forma === 'arroba' ? r2v(arrobas * x.preco) : x.forma === 'kg' ? r2v(bruto * x.preco) : r2v(x.cabecas * x.preco)) : 0;
+  return {
+    barrigaKg: temBarriga ? r2v(bruto - pesoLiquido) : 0,
+    pesoLiquido,
+    arrobas,
+    valor,
+    porArroba: valor > 0 && arrobas > 0 ? valor / arrobas : 0,
+    porKg: valor > 0 && bruto > 0 ? valor / bruto : 0,
+    porCabeca: valor > 0 && x.cabecas > 0 ? valor / x.cabecas : 0,
+    pesoMedio: bruto > 0 && x.cabecas > 0 ? bruto / x.cabecas : 0,
+    arrobasMedia: arrobas > 0 && x.cabecas > 0 ? arrobas / x.cabecas : 0,
+  };
+}

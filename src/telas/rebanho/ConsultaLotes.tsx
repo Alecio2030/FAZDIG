@@ -13,12 +13,13 @@ import { formatarNumero } from '../../lib/formatos';
 import { limparBusca, useBusca } from '../../lib/useBusca';
 import { nomeLote, resumoComposicao } from '../../lib/rebanho';
 import { useSigla } from '../../lib/useSigla';
+import { textoFinalidade } from '../../lib/lotes';
 import type { NavPilha } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
 const MAXIMO = 20;
 const um = (v: any) => (Array.isArray(v) ? v[0] ?? null : v ?? null);
-const CAMPOS = 'id, numero, descricao, situacao, sexo, categoria, nascimento_ref, nascimento_aproximado, raca:racas!lotes_raca_id_fkey ( nome )';
+const CAMPOS = 'id, numero, descricao, situacao, finalidade, finalidade_outra, controle_individual, sexo, categoria, nascimento_ref, nascimento_aproximado, raca:racas!lotes_raca_id_fkey ( nome )';
 
 /** Conta os animais ativos de cada lote e junta ao lote. */
 async function comCabecas(lotes: any[]) {
@@ -78,7 +79,10 @@ export default function ConsultaLotes() {
     <Linha
       key={l.id}
       titulo={nomeLote(l, sigla) + (l.situacao === 'encerrado' ? '  (encerrado)' : '')}
-      linhas={[resumoComposicao({ sexo: l.sexo, categoria: l.categoria, raca: l.raca?.nome, nascimento: l.nascimento_ref, aproximado: l.nascimento_aproximado }) || null]}
+      linhas={[
+        resumoComposicao({ sexo: l.sexo, categoria: l.categoria, raca: l.raca?.nome, nascimento: l.nascimento_ref, aproximado: l.nascimento_aproximado }) || null,
+        [textoFinalidade(l.finalidade, l.finalidade_outra), l.controle_individual ? 'Controle individual' : null].filter(Boolean).join(' · ') || null,
+      ]}
       direita={`${formatarNumero(l.cabecas)} cab.`}
       onPress={() => navegacao.navigate('LoteDetalhe', { id: l.id })}
     />

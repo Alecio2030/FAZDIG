@@ -230,7 +230,7 @@ export default function PainelFormacao({ bem, aoMudar, aoErro }: { bem: any; aoM
 
       <Text style={estilos.subtitulo}>Quem recebe a {lavoura ? 'exaustão' : 'depreciação'} {lavoura ? '(opcional)' : '*'}</Text>
       <RateioCentros linhas={rateio} aoMudar={setRateio} carregar={carregarCentros} erro={erros.rateio} />
-      {lavoura && <Text style={estilos.nota}>Em branco, vai para o centro do próprio talhão (ex.: 4.1.01-001): daí em diante é custo de produção.</Text>}
+      {lavoura && <Text style={estilos.nota}>Em branco, vai para o centro do próprio talhão (ex.: 4.01.01-001): daí em diante é custo de produção.</Text>}
 
       <Botao titulo="Concluir a formação e ativar o bem" onPress={concluir} carregando={salvando} />
     </>

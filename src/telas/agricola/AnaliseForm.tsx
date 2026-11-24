@@ -19,7 +19,7 @@ import { EPOCAS_FOLIAR, parametrosDe } from '../../lib/agronomia';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
-type Amostra = { identificacao: string | null; profundidade: string | null; valores: Record<string, number>; conversoes?: string[] };
+type Amostra = { identificacao: string | null; profundidade: string | null; valores: Record<string, number>; referencias?: Record<string, { min: number | null; max: number | null }>; conversoes?: string[] };
 
 /** Análise de solo ou foliar de um talhão: foto do laudo (a IA lê) ou digitada. Abre para conferência; nada grava sozinho. */
 export default function AnaliseForm() {
@@ -36,6 +36,8 @@ export default function AnaliseForm() {
   const [valores, setValores] = useState<Record<string, string>>({});
   const [obs, setObs] = useState('');
   const [arquivo, setArquivo] = useState<string | null>(null);
+  // V166: a coluna de valor adequado do laboratório
+  const [referencias, setReferencias] = useState<Record<string, { min: number | null; max: number | null }> | null>(null);
   const [amostras, setAmostras] = useState<Amostra[]>([]);
   const [escolhida, setEscolhida] = useState<string[]>([]);
   const [avisoDoc, setAvisoDoc] = useState<string | null>(null);
@@ -65,6 +67,7 @@ export default function AnaliseForm() {
           setAmostra(a.amostra ?? '');
           setObs(a.observacoes ?? '');
           setArquivo(a.arquivo_documento ?? null);
+          setReferencias(a.referencias ?? null);
           setValores(Object.fromEntries(Object.entries((a.dados ?? {}) as Record<string, number>).map(([k, v]) => [k, numeroParaCampo(v)])));
         }
       } catch (e) {
@@ -77,6 +80,7 @@ export default function AnaliseForm() {
   function aplicarAmostra(a: Amostra, tipoLaudo: string) {
     setValores(Object.fromEntries(Object.entries(a.valores ?? {}).filter(([, v]) => typeof v === 'number' && Number.isFinite(v)).map(([k, v]) => [k, numeroParaCampo(v)])));
     setAmostra(a.identificacao ?? '');
+    setReferencias(a.referencias && Object.keys(a.referencias).length ? a.referencias : null);
     if (tipoLaudo === 'solo' && a.profundidade) {
       const p = a.profundidade.replace(/\s|cm/gi, '').replace(/[-a]/, '–');
       const achou = PROFUNDIDADES.find((x) => x.valor.replace(/\s|cm/g, '') === p);
@@ -87,6 +91,9 @@ export default function AnaliseForm() {
   /** Laudo lido pela IA: preenche a tela para conferência. Com várias amostras, pergunta qual é a deste talhão. */
   function aplicarLaudo(d: any, arq: string | null) {
     setErro(null);
+    if (d.tipo === 'organico' || d.tipo === 'corretivo') {
+      return setErro(`Este laudo é de ${d.tipo === 'organico' ? 'fertilizante orgânico' : 'calcário (corretivo)'}, não de talhão: use Agrícola › Análises e laudos.`);
+    }
     const ams: Amostra[] = Array.isArray(d.amostras) ? d.amostras : [];
     const tipoLaudo = d.tipo === 'foliar' ? 'foliar' : 'solo';
     setTipo([tipoLaudo]);
@@ -137,6 +144,7 @@ export default function AnaliseForm() {
       amostra: amostra.trim() || null,
       observacoes: obs.trim() || null,
       arquivo_documento: arquivo,
+      referencias,
       dados,
       // as colunas antigas continuam preenchidas (telas que ainda as usam)
       ph: dados.ph ?? null,
@@ -185,6 +193,7 @@ export default function AnaliseForm() {
         <EntradaDocumento
           titulo="Entrada pelo laudo do laboratório"
           tipo="analise"
+          aceitaArquivo
           rotuloFoto="Foto do laudo"
           instrucao="Enquadre a tabela de resultados inteira, bem reta e com boa luz. Se o laudo tiver duas folhas, fotografe a dos resultados."
           dica="A IA lê os resultados e já converte as unidades para o padrão do sistema. Nada é gravado sem o seu Gravar."

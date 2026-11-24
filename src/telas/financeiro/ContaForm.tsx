@@ -11,6 +11,7 @@ import Interruptor from '../../componentes/Interruptor';
 import SeletorLista, { type ItemLista } from '../../componentes/SeletorLista';
 import AbasCadastro, { type Aba } from '../../componentes/AbasCadastro';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
+import { planoCompleto } from '../../lib/planoTodo';
 import { NIVEL_MAXIMO, ROTULO_TIPO_CONTA, TIPOS_CONTA, erroCodigo, nivelDe, proximoCodigo, type Conta, type TipoConta } from '../../lib/planoContas';
 import ConsultaContas from './ConsultaContas';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
@@ -103,14 +104,12 @@ export default function ContaForm() {
   }
 
   const carregarTodas = useCallback(async (): Promise<ItemLista[]> => {
-    const d = await consulta<any[]>(supabase.from('plano_contas').select('id, codigo, nome, tipo, analitica, ativa').order('codigo'));
+    const d = await planoCompleto<any>('id, codigo, nome, tipo, analitica, ativa');
     return d.map((c) => ({ id: c.id, titulo: `${c.codigo}  ${c.nome}`, detalhe: `${ROTULO_TIPO_CONTA[c.tipo]} · ${c.analitica ? 'analítica' : 'sintética'}${c.ativa ? '' : ' · inativa'}` }));
   }, []);
 
   const carregarPais = useCallback(async (): Promise<ItemLista[]> => {
-    const d = await consulta<any[]>(
-      supabase.from('plano_contas').select('id, codigo, nome, tipo, ativa').eq('analitica', false).order('codigo'),
-    );
+    const d = await planoCompleto<any>('id, codigo, nome, tipo, ativa', (q) => q.eq('analitica', false));
     return d
       .filter((c) => nivelDe(c.codigo) < NIVEL_MAXIMO)
       .map((c) => ({ id: c.id, titulo: `${c.codigo}  ${c.nome}`, detalhe: ROTULO_TIPO_CONTA[c.tipo], oculto: !c.ativa }));

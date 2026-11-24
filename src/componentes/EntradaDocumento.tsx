@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Alert } from '../lib/alerta';
-import { escolherImagem } from '../lib/fotos';
+import { escolherImagem, reduzirImagemArquivo } from '../lib/fotos';
 import * as DocumentPicker from 'expo-document-picker';
 import Botao from './Botao';
 import { lerFotoDocumento } from '../lib/documentos';
@@ -25,13 +25,15 @@ type Props = {
   /** recebe o texto do XML (só aparece o botão do XML se for passado) */
   aoXml?: (texto: string) => void | Promise<void>;
   aoErro: (msg: string) => void;
+  /** V166: botão para escolher um arquivo (PDF ou imagem) do computador ou do celular */
+  aceitaArquivo?: boolean;
 };
 
 /**
  * Quadro "entrada por foto de documento": câmera ou galeria, a IA lê e a tela abre preenchida para conferência.
  * Nunca grava nada: quem grava é o botão da própria tela.
  */
-export default function EntradaDocumento({ titulo, tipo, rotuloFoto = 'Foto do documento', instrucao = 'Enquadre o papel inteiro, com boa luz.', dica, textoLendo = 'Lendo o documento… (uns 10 segundos)', aoLer, aoXml, aoErro }: Props) {
+export default function EntradaDocumento({ titulo, tipo, rotuloFoto = 'Foto do documento', instrucao = 'Enquadre o papel inteiro, com boa luz.', dica, textoLendo = 'Lendo o documento… (uns 10 segundos)', aoLer, aoXml, aoErro, aceitaArquivo }: Props) {
   const [lendo, setLendo] = useState<string | null>(null);
 
   function escolherFoto() {
@@ -50,6 +52,29 @@ export default function EntradaDocumento({ titulo, tipo, rotuloFoto = 'Foto do d
       const a = r.foto;
       setLendo(textoLendo);
       const res = await lerFotoDocumento(tipo, a.base64, a.mimeType);
+      if ('erro' in res) aoErro(`${res.erro} Você pode tentar de novo ou digitar.`);
+      else await aoLer(res.dados, res.arquivo, 'foto');
+    } catch (e: any) {
+      aoErro(String(e?.message ?? e));
+    }
+    setLendo(null);
+  }
+
+  /** V166: PDF ou imagem escolhidos de um arquivo (o mesmo leitor da foto) */
+  async function lerArquivo() {
+    try {
+      const r = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'image/*'], copyToCacheDirectory: true });
+      if (r.canceled || !r.assets?.[0]) return;
+      const a = r.assets[0];
+      const nome = (a.name ?? '').toLowerCase();
+      const formato = a.mimeType || (nome.endsWith('.pdf') ? 'application/pdf' : nome.endsWith('.png') ? 'image/png' : 'image/jpeg');
+      if (formato !== 'application/pdf' && !formato.startsWith('image/')) return aoErro('Escolha um PDF ou uma imagem (JPG ou PNG).');
+      if ((a.size ?? 0) > 20 * 1024 * 1024) return aoErro('Arquivo grande demais (até 20 MB).');
+      setLendo(textoLendo);
+      // imagem de arquivo vem do tamanho original (vários MB): reduz como a da câmera
+      const reduzida = formato.startsWith('image/') ? await reduzirImagemArquivo(a.uri) : null;
+      const base64 = reduzida ? reduzida.base64 : await arquivoParaBase64(a.uri);
+      const res = await lerFotoDocumento(tipo, base64, reduzida ? reduzida.mimeType : formato);
       if ('erro' in res) aoErro(`${res.erro} Você pode tentar de novo ou digitar.`);
       else await aoLer(res.dados, res.arquivo, 'foto');
     } catch (e: any) {
@@ -85,6 +110,11 @@ export default function EntradaDocumento({ titulo, tipo, rotuloFoto = 'Foto do d
             <View style={{ flex: 1 }}>
               <Botao titulo={`📷  ${rotuloFoto}`} tipo="secundario" onPress={escolherFoto} />
             </View>
+            {aceitaArquivo && (
+              <View style={{ flex: 1 }}>
+                <Botao titulo="📄  Arquivo (PDF)" tipo="secundario" onPress={lerArquivo} />
+              </View>
+            )}
             {aoXml && (
               <View style={{ flex: 1 }}>
                 <Botao titulo="📄  XML da NF-e" tipo="secundario" onPress={lerXml} />
@@ -96,6 +126,17 @@ export default function EntradaDocumento({ titulo, tipo, rotuloFoto = 'Foto do d
       )}
     </View>
   );
+}
+
+/** Lê o arquivo escolhido e devolve o conteúdo em base64 (funciona no celular e no navegador). */
+async function arquivoParaBase64(uri: string): Promise<string> {
+  const blob = await (await fetch(uri)).blob();
+  return await new Promise<string>((ok, falha) => {
+    const leitor = new FileReader();
+    leitor.onload = () => ok(String(leitor.result).replace(/^data:[^,]*,/, ''));
+    leitor.onerror = () => falha(new Error('Não foi possível ler o arquivo.'));
+    leitor.readAsDataURL(blob);
+  });
 }
 
 const estilos = StyleSheet.create({

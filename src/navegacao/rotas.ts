@@ -10,6 +10,10 @@ export type PilhaParams = {
   /** email: já vem preenchido quando se chega de Criar conta ou de Esqueci minha senha */
   Entrar: { email?: string; aviso?: string } | undefined;
   CriarConta: undefined;
+  /** V184: o vaqueiro entra só aqui */
+  ModoVaqueiro: undefined;
+  /** V184: o gerente confere o que veio do campo */
+  CampoConferir: undefined;
   /** Trocar a senha por um código enviado ao e-mail */
   EsqueciSenha: { email?: string } | undefined;
   PrimeiroAcesso: undefined;
@@ -27,12 +31,17 @@ export type PilhaParams = {
   // Etapa 2: cadastros de base
   // Padrão das telas: sem id abre nas abas Cadastrar | Consultar;
   // "aviso" é a mensagem de sucesso depois de cadastrar.
-  PessoaForm: { id?: string; banco?: boolean } & Abertura;
+  /** novo (V158): cadastro pedido de outra tela (ex.: cliente na Venda); ao salvar, volta para ela com a pessoa escolhida */
+  PessoaForm: { id?: string; banco?: boolean; novo?: { nome: string; tipo: string } } & Abertura;
   FazendaForm: { id?: string } & Abertura;
   ProdutorForm: undefined;
   UsuarioForm: { email?: string } & Abertura;
   // Agrícola
   InsumoForm: { id?: string; grupo?: 'veterinario' } & Abertura;
+  /** V179: Mais › Estoque: primeiro a fazenda, depois o saldo dos produtos dela */
+  EstoqueInsumos: { fazendaId?: string } | undefined;
+  /** V179: estoque de um produto numa fazenda: saldo, custos, entradas e saídas e o estoque inicial */
+  EstoqueDetalhe: { insumoId: string; fazendaId: string };
   // Financeiro
   ContaForm: { id?: string } & Abertura;
   /** nova: veio de outra tela (ex.: Financiamentos) com a conta digitada; cadastra e volta para ela */
@@ -40,6 +49,7 @@ export type PilhaParams = {
   CentroForm: { id?: string } & Abertura;
   AreaForm: { tipo: TipoArea; id?: string } & Abertura;
   MangaDetalhe: { id: string };
+  Capins: undefined;
   VisaoPasto: undefined;
   CompraForm: Abertura | undefined;
   CompraDetalhe: { id: string };
@@ -50,11 +60,25 @@ export type PilhaParams = {
   VendaForm: { aba?: 'cadastrar' | 'consultar'; aviso?: string; contratoId?: string; excluirNumero?: number } | undefined;
   VendaDetalhe: { id: string };
   TituloBaixa: { id: string };
+  /** V183: pagar pelo banco (copia o código e abre o app do banco) */
+  PagamentoBanco: { id: string };
   TituloDetalhe: { id: string };
   ImobilizadoForm: Abertura | undefined;
   FinanciamentoForm: Abertura | undefined;
   RelatorioCaixa: undefined;
   RelatorioResultado: undefined;
+  /** V173: balancete das contas de resultado, sintético (grau 3) ou analítico (grau 4) */
+  Balancete: undefined;
+  /** V173: lançamentos de uma conta do plano (centro de custo de grau 3 ou conta de grau 4) no período */
+  /** V174: parâmetros (vida útil, residual) e rateio padrão das despesas sem centro */
+  Parametros: undefined;
+  /** V174: fechamento do mês: depreciação/exaustão lançadas sozinhas e pendências */
+  FechamentoMes: undefined;
+  /** V175: trato do dia dos lotes (gerado sozinho pela dieta; corrige-se só a exceção) */
+  TratoDia: { data?: string; id?: string } | undefined;
+  LancamentosConta: { codigo: string; nome: string; periodo?: string; de?: string; ate?: string; unidade?: string };
+  /** V177: razão de uma conta patrimonial (Ativo, Passivo e PL): saldo anterior, débitos, créditos e saldo */
+  RazaoConta: { codigo: string; nome: string; periodo?: string; de?: string; ate?: string };
   ExportarContabilidade: undefined;
   TipoLancamentoForm: Abertura | undefined;
   ImobilizadoDetalhe: { id: string };
@@ -67,6 +91,9 @@ export type PilhaParams = {
   /** análise de solo ou foliar do talhão: foto do laudo ou digitada; e o painel com as contas e o parecer */
   AnaliseForm: { areaId: string; id?: string };
   AnaliseDetalhe: { id: string };
+  /** V166: Agrícola › Análises e laudos (solo, folha, adubo orgânico e calcário) */
+  LaudoForm: Abertura | undefined;
+  LaudoInsumoDetalhe: { id: string };
   /** "pre" vem do plano de adubação: abre já com os produtos e a dose da aplicação programada */
   /** "irrigar" vem do balanço hídrico: abre como Irrigação, com a lâmina sugerida (0 = sem lâmina) */
   AtividadeForm: ({ areaId?: string; numeroRetorno?: number; irrigar?: { lamina: number }; pre?: { sub: string; produtos: { insumoId: string; dose: number; unidade: string; por: string }[]; parcelaIds: string[]; obs?: string } } & Omit<Abertura, 'aba'> & { aba?: 'cadastrar' | 'retorno' | 'consultar' }) | undefined;
@@ -90,6 +117,14 @@ export type PilhaParams = {
   RegistroLancamentos: undefined;
   /** Cópias de segurança: a automática da semana, a feita na hora e o arquivo para guardar */
   CopiaSeguranca: undefined;
+  /** V156: NF-e por fazenda — dados fiscais, certificado A1, numeração, ambiente e teste com a Sefaz */
+  NotaFiscalConfig: undefined;
+  /** V157: conferência e emissão da NF-e de uma venda */
+  NotaFiscalEmitir: { vendaId: string; /** V203: a nota pode juntar várias vendas (a primeira é a principal) */ vendaIds?: string[] };
+  /** V157: uma NF-e (DANFE, XML, consulta e cancelamento) */
+  NotaFiscalDetalhe: { id: string; aviso?: string };
+  /** V157: busca das NF-e emitidas */
+  NotasFiscais: undefined;
   SafraDetalhe: { id: string };
   /** Colheitas: abas Lançar | Pagamento (vales e fechamento dos colhedores) | Consultar */
   ColheitaForm: { areaId?: string; aba?: 'lancar' | 'pagamento' | 'consultar'; aviso?: string; abrirId?: string } | undefined;
@@ -122,6 +157,10 @@ export type PilhaParams = {
   LoteDetalhe: { id: string };
   MovimentacaoForm: Abertura | undefined;
   MovimentacaoDetalhe: { id: string };
+  /** V163: GTA – vem preparada a partir de um movimento ou de uma venda */
+  GtaForm: (Abertura & { movimentacaoId?: string; vendaId?: string }) | undefined;
+  /** V178: estoque de gado (sexo, faixa da GTA, total e com GTA) */
+  EstoqueFiscal: Abertura | undefined;
   PesagemForm: Abertura | undefined;
   PesagemDetalhe: { id: string };
   SanidadeForm: Abertura | undefined;

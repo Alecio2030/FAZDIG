@@ -9,6 +9,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import Tela from '../../componentes/Tela';
 import Campo from '../../componentes/Campo';
 import CampoMoeda from '../../componentes/CampoMoeda';
+import ParcelasIntermediarias, { CampoQtdeIntermediarias, ajustarIntermediarias, erroIntermediarias, gerarSerie, juntarParcelas, somaLinhas, type LinhaParcela } from '../../componentes/ParcelasIntermediarias';
 import CampoData from '../../componentes/CampoData';
 import Botao from '../../componentes/Botao';
 import Aviso from '../../componentes/Aviso';
@@ -20,6 +21,7 @@ import CampoPessoaBusca from '../../componentes/CampoPessoaBusca';
 import AbasCadastro, { type Aba } from '../../componentes/AbasCadastro';
 import ConsultaCompras from './ConsultaCompras';
 import DespesaForm from './DespesaForm';
+import ContaImobilizado, { contasImobilizado } from '../../componentes/ContaImobilizado';
 import { useSessao } from '../../contexto/SessaoContext';
 import { voltarDaConsulta } from '../../lib/voltarConsulta';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
@@ -36,7 +38,10 @@ import { cores, tam } from '../../tema';
 
 type Item = {
   chave: string;
-  tipo: 'insumo' | 'servico';
+  tipo: 'insumo' | 'servico' | 'imobilizado';
+  /** V178: bem do Imobilizado – conta do grupo do Ativo Imobilizado */
+  contaId?: string | null;
+  contaNome?: string;
   insumoId: string | null;
   novo: boolean; // produto cadastrado agora, nesta compra
   categoria: string;
@@ -50,6 +55,8 @@ type Item = {
   /** quanto tem cada embalagem NESTA compra (ex.: 25, quando veio saco de 25 kg) */
   conteudo: string;
   unit: string;
+  /** V172: desconto no próprio item (R$); o valor do item já vem líquido (qtde × unitário − desconto) */
+  desc: string;
   total: string;
   lote: string;
   validade: string;
@@ -101,7 +108,7 @@ const qtdEstoque = (i: Item): number | null => {
   const q = n(i.qtd);
   return q == null ? null : Math.round(q * fatorEmb(i) * 10000) / 10000;
 };
-const itemVazio = (): Item => ({ chave: chave(), tipo: 'insumo', insumoId: null, novo: false, categoria: 'outro', unidade: 'un', temMinimo: true, descricao: '', qtd: '', padrao: null, medida: '', conteudo: '', unit: '', total: '', lote: '', validade: '', minimo: '', icms: '', ipi: '', st: '', impostos: false });
+const itemVazio = (): Item => ({ chave: chave(), tipo: 'insumo', insumoId: null, novo: false, categoria: 'outro', unidade: 'un', temMinimo: true, descricao: '', qtd: '', padrao: null, medida: '', conteudo: '', unit: '', desc: '', total: '', lote: '', validade: '', minimo: '', icms: '', ipi: '', st: '', impostos: false });
 
 /**
  * Compras: Produtos (insumos e peças, com estoque) ou Despesa (sem estoque: energia, serviço, manutenção...).
@@ -119,7 +126,10 @@ export default function CompraForm() {
   /** o que está sendo lançado: produtos (estoque) ou despesa (sem estoque, tela própria) */
   const [modo, setModo] = useState<'produtos' | 'despesa'>(soDespesa ? 'despesa' : 'produtos');
   const [despesaId, setDespesaId] = useState<string | null>(null);
+  // V172: nota lida na Despesa que tem vários produtos: vai para Produtos e é aplicada lá
+  const [leituraPendente, setLeituraPendente] = useState<{ d: LeituraNota; arq: string | null } | null>(null);
   const [id, setId] = useState<string | null>(null);
+  const [fazCompra, setFazCompra] = useState<string | null>(null); // V202: a compra alterada fica na fazenda dela
   const [numero, setNumero] = useState<number | null>(null);
   const [proximo, setProximo] = useState<number | null>(null);
   const [data, setData] = useState(hojeBR());
@@ -141,6 +151,9 @@ export default function CompraForm() {
   const [primeiro, setPrimeiro] = useState('');
   const [intervalo, setIntervalo] = useState('30');
   const [parcelas, setParcelas] = useState<Parcela[]>([]);
+  const [nInterm, setNInterm] = useState('0');
+  const [interm, setInterm] = useState<LinhaParcela[]>([]);
+  const [fixo, setFixo] = useState('');
   const [obs, setObs] = useState('');
   const [origem, setOrigem] = useState<Origem | null>(null);
   const [lendo, setLendo] = useState<string | null>(null);
@@ -243,7 +256,14 @@ export default function CompraForm() {
   })();
   const temAcrescimo = custos.some((c, k) => Math.abs(c.custo - (n(itens[k].total) ?? 0)) > 0.004);
   const somaRateio = rateio.reduce((s, x) => s + (n(x.perc) ?? 0), 0);
-  const somaParcelas = parcelas.reduce((s, x) => s + (n(x.valor) ?? 0), 0);
+  // V178: compra de bem do Imobilizado (todos os itens sem estoque; o bem na conta do grupo do Ativo Imobilizado)
+  const itemImob = itens.find((i) => i.tipo === 'imobilizado' && i.contaId);
+  const contaImob = itemImob?.contaId ?? null;
+  const nomeContaImob = itemImob?.contaNome;
+  // V170: intermediárias só no a prazo
+  const somaInterm = forma[0] === 'prazo' ? somaLinhas(interm) : 0;
+  const valorFixo = forma[0] === 'prazo' && interm.length ? n(fixo) ?? 0 : 0;
+  const somaParcelas = r2(parcelas.reduce((s, x) => s + (n(x.valor) ?? 0), 0) + somaInterm);
 
   // Parcelas: geradas pelo nº, 1º vencimento e intervalo (a prazo). À vista: uma, na data da compra.
   const gerarParcelas = useCallback(() => {
@@ -251,15 +271,17 @@ export default function CompraForm() {
       setParcelas([{ chave: chave(), venc: data, valor: moedaParaCampo(total) }]);
       return;
     }
-    const q = Math.max(1, Math.min(60, Number(nParc) || 1));
+    const q = Math.max(1, Math.min(120, Number(nParc) || 1));
     const base = paraBanco(primeiro) ?? (paraBanco(data) ? somarDias(paraBanco(data)!, Number(intervalo) || 30) : null);
     if (!base) return;
-    const cada = Math.floor((total / q) * 100) / 100;
-    const ultima = r2(total - cada * (q - 1));
-    setParcelas(
-      Array.from({ length: q }, (_, i) => ({ chave: chave(), venc: doBanco(somarDias(base, i * (Number(intervalo) || 30))), valor: moedaParaCampo(i === q - 1 ? ultima : cada) })),
-    );
-  }, [forma, nParc, primeiro, intervalo, data, total]);
+    // V170: as normais dividem o que sobra depois das intermediárias (ou têm o valor fixo informado)
+    const restante = r2(total - somaInterm);
+    if (restante <= 0 && valorFixo <= 0) return setParcelas([]);
+    setParcelas(gerarSerie(q, base, Number(intervalo) || 30, restante, valorFixo));
+  }, [forma, nParc, primeiro, intervalo, data, total, somaInterm, valorFixo]);
+  useEffect(() => {
+    setInterm((l) => ajustarIntermediarias(l, forma[0] === 'prazo' ? nInterm : '0'));
+  }, [nInterm, forma[0]]);
   const manterParcelas = useRef(false); // compra aberta: mantém as parcelas gravadas até a pessoa mexer
   useEffect(() => {
     if (carregando) return;
@@ -269,7 +291,7 @@ export default function CompraForm() {
     }
     gerarParcelas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forma[0], nParc, primeiro, intervalo, total, forma[0] === 'avista' ? data : '', carregando]);
+  }, [forma[0], nParc, primeiro, intervalo, total, forma[0] === 'avista' ? data : '', carregando, somaInterm, valorFixo]);
 
   // ---- listas ----
   const buscarProdutos = useCallback(
@@ -314,15 +336,18 @@ export default function CompraForm() {
     mudar(it.chave, { categoria: cat, unidade: un, ...(un !== it.unidade ? { medida: medidaSugerida(un, undefined)[0] ?? '', conteudo: '' } : {}) });
     if (it.insumoId) await supabase.from('insumos').update({ categoria: cat, unidade: un }).eq('id', it.insumoId);
   }
-  function mudarQtdOuUnit(it: Item, campo: 'qtd' | 'unit', t: string) {
+  // V172: valor do item = qtde × unitário − desconto do item
+  function mudarQtdOuUnit(it: Item, campo: 'qtd' | 'unit' | 'desc', t: string) {
     const q = campo === 'qtd' ? n(t) : n(it.qtd);
     const u = campo === 'unit' ? n(t) : n(it.unit);
-    mudar(it.chave, { [campo]: t, ...(q != null && u != null ? { total: moedaParaCampo(r2(q * u)) } : {}) } as Partial<Item>);
+    const d = (campo === 'desc' ? n(t) : n(it.desc)) ?? 0;
+    mudar(it.chave, { [campo]: t, ...(q != null && u != null ? { total: moedaParaCampo(Math.max(0, r2(q * u - d))) } : {}) } as Partial<Item>);
   }
   function mudarTotal(it: Item, t: string) {
     const q = n(it.qtd);
     const v = n(t);
-    mudar(it.chave, { total: t, ...(it.tipo === 'insumo' && q && v != null ? { unit: moedaParaCampo(r2(v / q)) } : {}) });
+    const d = n(it.desc) ?? 0;
+    mudar(it.chave, { total: t, ...(it.tipo === 'insumo' && q && v != null ? { unit: moedaParaCampo(r2((v + d) / q)) } : {}) });
   }
 
   // ---- frete à parte (CT-e / NF de frete) ----
@@ -458,6 +483,13 @@ export default function CompraForm() {
   }
 
   /** Preenche a tela com a nota: fornecedor pelo CNPJ, produtos pelo vínculo aprendido, valores e vencimentos. */
+  useEffect(() => {
+    if (modo !== 'produtos' || !leituraPendente) return;
+    const { d, arq } = leituraPendente;
+    setLeituraPendente(null);
+    aplicarLeitura(d, 'foto', arq);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modo, leituraPendente]);
   async function aplicarLeitura(l: LeituraNota, tipo: 'foto' | 'xml', arquivo: string | null) {
     if (!fid) return;
     const faltou: string[] = [...(l.nao_lido ?? [])];
@@ -524,7 +556,10 @@ export default function CompraForm() {
       const pr = v ? prods.find((y) => y.id === v.insumo_id) : null;
       const qtdNota = x.quantidade ?? null;
       const qtd = qtdNota != null ? qtdNota * (pr ? Number(v.fator) || 1 : 1) : null;
-      const totalItem = x.valor_total ?? (qtdNota != null && x.valor_unitario != null ? r2(qtdNota * x.valor_unitario) : null);
+      const bruto = x.valor_total ?? (qtdNota != null && x.valor_unitario != null ? r2(qtdNota * x.valor_unitario) : null);
+      // V172: desconto da linha da nota fica no item; o valor do item é o líquido
+      const descItem = x.desconto && x.desconto > 0 && !eCte ? r2(x.desconto) : 0;
+      const totalItem = bruto != null ? r2(bruto - descItem) : null;
       if (eCte) {
         return {
           ...itemVazio(),
@@ -547,7 +582,8 @@ export default function CompraForm() {
         descricao: x.descricao,
         qtd: qtd != null ? numeroParaCampo(Math.round(qtd * 10000) / 10000) : '',
         total: totalItem != null ? moedaParaCampo(totalItem) : '',
-        unit: totalItem != null && qtd ? moedaParaCampo(r2(totalItem / qtd)) : '',
+        desc: descItem ? moedaParaCampo(descItem) : '',
+        unit: bruto != null && qtd ? moedaParaCampo(r2(bruto / qtd)) : '',
         lote: x.lote ?? '',
         validade: x.validade ? doBanco(x.validade) : '',
         icms: x.valor_icms ? moedaParaCampo(x.valor_icms) : '',
@@ -565,7 +601,10 @@ export default function CompraForm() {
     const ipiItens = (l.itens ?? []).reduce((t, x) => t + (x.valor_ipi ?? 0), 0);
     const stItens = (l.itens ?? []).reduce((t, x) => t + (x.valor_icms_st ?? 0), 0);
     const outrasNota = (l.frete ?? 0) + (l.seguro ?? 0) + (l.outras_despesas ?? 0) + ipiItens + stItens;
-    const somaNota = novos.reduce((t, i) => t + (n(i.total) ?? 0), 0) + outrasNota - (l.desconto ?? 0);
+    // V172: o desconto do quadro da nota é a soma dos descontos dos itens (+ algum geral); nos itens ele já foi abatido
+    const descItens = r2(novos.reduce((t, i) => t + (n(i.desc) ?? 0), 0));
+    const descGeral = Math.max(0, r2((l.desconto ?? 0) - descItens));
+    const somaNota = novos.reduce((t, i) => t + (n(i.total) ?? 0), 0) + outrasNota - descGeral;
     if (!ipiItens && l.valor_ipi) atencao.push(`a nota tem IPI de ${formatarMoeda(l.valor_ipi)} que não veio por item: lance no item (toque em "Impostos do item")`);
     if (!stItens && l.valor_icms_st) atencao.push(`a nota tem ICMS-ST de ${formatarMoeda(l.valor_icms_st)} que não veio por item: lance no item`);
     if (compradorNota) setCompradorId(compradorNota.id);
@@ -580,7 +619,9 @@ export default function CompraForm() {
     setAcrescimo('');
     setOutras(l.outras_despesas ? moedaParaCampo(l.outras_despesas) : '');
     if (l.frete) atencao.push(`frete de ${formatarMoeda(l.frete)} rateado nos itens pelo valor de cada um (vai para o custo do produto)`);
-    setDesconto(l.desconto ? moedaParaCampo(l.desconto) : '');
+    setDesconto(descGeral > 0.004 ? moedaParaCampo(descGeral) : '');
+    if (descItens > 0) atencao.push(`desconto de ${formatarMoeda(descItens)} lançado nos próprios itens`);
+    if (descGeral > 0.004) atencao.push(`desconto geral de ${formatarMoeda(descGeral)} rateado nos itens pelo valor de cada um`);
     // vencimentos da nota (duplicatas / vencimento da fatura ou boleto): as datas lidas sempre valem.
     // Se a soma não bate com a nota, os valores vêm divididos pelo total e o aviso pede conferência.
     const dups = (l.duplicatas ?? []).filter((d) => d && /^\d{4}-\d{2}-\d{2}$/.test(d.vencimento)).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
@@ -634,7 +675,7 @@ export default function CompraForm() {
       const c = await consulta<any>(
         supabase
           .from('compras')
-          .select('*, itens:compra_itens ( *, insumo:insumos ( categoria, unidade, unidade_dose, conteudo_por_unidade, conteudo_qtd, conteudo_medida, estoque_minimo ) ), rateio:compra_rateios ( centro_custo_id, percentual ), parcelas:lancamentos ( valor, data_vencimento, parcela )')
+          .select('*, itens:compra_itens ( *, insumo:insumos ( categoria, unidade, unidade_dose, conteudo_por_unidade, conteudo_qtd, conteudo_medida, estoque_minimo ) ), rateio:compra_rateios ( centro_custo_id, percentual ), parcelas:lancamentos ( valor, data_vencimento, parcela, intermediaria )')
           .eq('id', cid)
           .single(),
       );
@@ -649,7 +690,16 @@ export default function CompraForm() {
         setCarregando(false);
         return;
       }
+      // V178: compra de bem do imobilizado (conta do Ativo): os itens sem estoque voltam como "Bem do Imobilizado"
+      let contaBem: { id: string; nome: string } | null = null;
+      if (c.conta_contabil_id) {
+        // só conta de bens do grupo do Ativo Imobilizado (os estoques também são Ativo e não contam aqui)
+        const imob = await contasImobilizado().catch(() => null);
+        const pc = imob?.contas.find((x) => x.id === c.conta_contabil_id);
+        if (pc) contaBem = { id: pc.id, nome: pc.nome };
+      }
       setId(c.id);
+      setFazCompra(c.fazenda_id ?? null);
       setNumero(c.numero);
       setData(doBanco(c.data));
       setPessoaId(c.pessoa_id);
@@ -664,14 +714,17 @@ export default function CompraForm() {
             ...itemVazio(),
             ...emb,
             ...(comoVeio ? { conteudo: numeroParaCampo(i.conteudo_embalagem) } : {}),
-            tipo: i.tipo_item === 'insumo' ? 'insumo' : 'servico',
+            tipo: i.tipo_item === 'insumo' ? 'insumo' : contaBem ? 'imobilizado' : 'servico',
+            contaId: i.tipo_item !== 'insumo' && contaBem ? contaBem.id : null,
+            contaNome: i.tipo_item !== 'insumo' && contaBem ? contaBem.nome : undefined,
             insumoId: i.insumo_id,
             categoria: ins?.categoria ?? 'outro',
             unidade: ins?.unidade ?? i.unidade ?? 'un',
             temMinimo: ins?.estoque_minimo != null,
             descricao: i.descricao ?? '',
             qtd: numeroParaCampo(comoVeio ? i.embalagens : i.quantidade),
-            unit: comoVeio ? moedaParaCampo(r2(Number(i.valor_total) / Number(i.embalagens))) : Number(i.valor_unitario) ? moedaParaCampo(i.valor_unitario) : '',
+            unit: comoVeio ? moedaParaCampo(r2((Number(i.valor_total) + Number(i.desconto ?? 0)) / Number(i.embalagens))) : Number(i.valor_unitario) ? moedaParaCampo(i.valor_unitario) : '',
+            desc: Number(i.desconto) ? moedaParaCampo(i.desconto) : '',
             total: Number(i.valor_total) ? moedaParaCampo(i.valor_total) : '',
             lote: i.lote_fabricacao ?? '',
             validade: i.validade ? doBanco(i.validade) : '',
@@ -691,11 +744,16 @@ export default function CompraForm() {
       setDesconto(Number(c.desconto) ? moedaParaCampo(c.desconto) : '');
       setRateio((c.rateio as any[]).map((x) => ({ chave: chave(), centroId: x.centro_custo_id, perc: numeroParaCampo(x.percentual) })));
       setBancoId(c.conta_bancaria_id);
-      const ps = ((c.parcelas as any[]) ?? []).sort((a, b) => a.parcela - b.parcela);
-      setForma([c.forma_pagamento ?? (ps.length > 1 ? 'prazo' : 'avista')]);
+      const todas = ((c.parcelas as any[]) ?? []).sort((a, b) => String(a.data_vencimento).localeCompare(String(b.data_vencimento)) || a.parcela - b.parcela);
+      const ps = todas.filter((x) => !x.intermediaria);
+      const pi = todas.filter((x) => x.intermediaria);
+      setForma([c.forma_pagamento ?? (todas.length > 1 ? 'prazo' : 'avista')]);
       if (ps.length > 1) setNParc(String(ps.length));
+      if (ps.length) setPrimeiro(doBanco(ps[0].data_vencimento));
+      setNInterm(String(pi.length));
+      setInterm(pi.map((x) => ({ chave: chave(), venc: doBanco(x.data_vencimento), valor: moedaParaCampo(x.valor) })));
       setParcelas(ps.map((x) => ({ chave: chave(), venc: doBanco(x.data_vencimento), valor: moedaParaCampo(x.valor) })));
-      manterParcelas.current = ps.length > 0;
+      manterParcelas.current = todas.length > 0;
       setObs(c.situacao === 'a_completar' ? '' : c.observacoes ?? '');
       // frete à parte: as compras que esta nota transportou e, se for mercadoria, os fretes que ela recebe
       const [lig, rec] = await Promise.all([
@@ -734,6 +792,7 @@ export default function CompraForm() {
 
   function limpar() {
     setId(null);
+    setFazCompra(null);
     setNumero(null);
     setData(hojeBR());
     setPessoaId(null);
@@ -750,6 +809,9 @@ export default function CompraForm() {
     setBancoId(null);
     setForma(['avista']);
     setPrimeiro('');
+    setNInterm('0');
+    setInterm([]);
+    setFixo('');
     setObs('');
     setErros({});
     setOrigem(null);
@@ -769,7 +831,8 @@ export default function CompraForm() {
       const q = n(i.qtd);
       const t = n(i.total);
       if (i.tipo === 'insumo' && !i.insumoId) e[`p${k}`] = `Item ${k + 1}: escolha o produto.`;
-      if (i.tipo === 'servico' && !i.descricao.trim()) e[`p${k}`] = `Item ${k + 1}: descreva o serviço ou item.`;
+      if (i.tipo !== 'insumo' && !i.descricao.trim()) e[`p${k}`] = i.tipo === 'imobilizado' ? `Item ${k + 1}: descreva o bem.` : `Item ${k + 1}: descreva o serviço ou item.`;
+      if (i.tipo === 'imobilizado' && !i.contaId) e[`c${k}`] = `Item ${k + 1}: escolha a conta do imobilizado (ou cadastre).`;
       if (i.tipo === 'insumo' && (q == null || q <= 0)) e[`q${k}`] = `Item ${k + 1}: informe a quantidade.`;
       if (pedeConteudo(i)) {
         const c = n(i.conteudo);
@@ -781,6 +844,12 @@ export default function CompraForm() {
       if (i.minimo.trim() && (n(i.minimo) == null || n(i.minimo)! < 0)) e[`m${k}`] = `Item ${k + 1}: estoque mínimo inválido.`;
     });
     if (total <= 0) e.total = 'O total da compra precisa ser maior que zero.';
+    // V178: o contas a pagar é da compra inteira; por isso o bem do imobilizado vai numa compra só dele, numa conta só
+    const bens = itens.filter((i) => i.tipo === 'imobilizado');
+    if (bens.length) {
+      if (itens.some((i) => i.tipo === 'insumo')) e.imob = 'Bem do Imobilizado e produto do estoque não vão na mesma compra: lance o bem numa compra separada (a mesma nota pode ser lançada em duas compras).';
+      else if (new Set(bens.map((i) => i.contaId)).size > 1) e.imob = 'Os bens desta compra estão em contas diferentes do imobilizado: lance uma compra para cada conta.';
+    }
     if (freteAberto && !transportadas.length) e.frete = 'Frete à parte: informe a compra transportada, ou toque em "Não é frete à parte".';
     else if (transportadas.length && itens.some((i) => i.tipo === 'insumo')) e.frete = 'Nota de frete à parte não tem produto de estoque: marque os itens como "Serviço / outro".';
     if (rateio.length) {
@@ -788,20 +857,28 @@ export default function CompraForm() {
       else if (new Set(rateio.map((x) => x.centroId)).size !== rateio.length) e.rateio = 'Há centro de custo repetido no rateio.';
       else if (Math.abs(somaRateio - 100) > 0.001) e.rateio = `O rateio soma ${formatarNumero(somaRateio, 2)}%: precisa fechar 100%.`;
     }
+    const eInt = forma[0] === 'prazo' ? erroIntermediarias(interm) : null;
     if (!parcelas.length) e.parcelas = 'Informe o pagamento.';
+    else if (eInt) e.parcelas = eInt;
     else if (parcelas.some((p) => !dataValida(p.venc) || n(p.valor) == null || n(p.valor)! <= 0)) e.parcelas = 'Confira o vencimento e o valor de cada parcela.';
     else if (Math.abs(somaParcelas - total) > 0.009) e.parcelas = `As parcelas somam ${formatarMoeda(somaParcelas)} e o total é ${formatarMoeda(total)}.`;
+    else if (dataValida(data)) {
+      // V202: nenhum vencimento antes da data da compra
+      const antes = [...interm, ...parcelas].find((p) => dataValida(p.venc) && paraBanco(p.venc)! < paraBanco(data)!);
+      if (antes) e.parcelas = `O vencimento ${antes.venc} é antes da data da compra (${data}). Confira o dia e o ano.`;
+    }
     setErros(e);
     const lista = Object.values(e);
     if (lista.length) return setErro(lista.length === 1 ? lista[0] : `Falta corrigir:\n• ${lista.join('\n• ')}`);
 
     const p = {
       id,
-      fazenda_id: fid,
+      fazenda_id: id ? fazCompra : fid,
       data: paraBanco(data),
       pessoa_id: pessoaId,
       numero_documento: documento,
-      conta_contabil_id: null, // classificação automática: o banco define pela categoria dos produtos
+      // classificação automática pela categoria dos produtos; V178: bem do imobilizado vai na conta escolhida
+      conta_contabil_id: contaImob,
       conta_bancaria_id: bancoId,
       forma_pagamento: forma[0],
       frete: n(frete) ?? 0,
@@ -813,9 +890,9 @@ export default function CompraForm() {
       desconto: n(desconto) ?? 0,
       observacoes: obs,
       itens: itens.map((i) => ({
-        tipo_item: i.tipo,
+        tipo_item: i.tipo === 'insumo' ? 'insumo' : 'servico', // o bem do imobilizado grava como item sem estoque
         insumo_id: i.tipo === 'insumo' ? i.insumoId : null,
-        descricao: i.tipo === 'servico' ? i.descricao : null,
+        descricao: i.tipo !== 'insumo' ? i.descricao : null,
         // o estoque conta na embalagem do cadastro: 10 sacos de 25 kg entram como 5 sacos de 50 kg
         quantidade: i.tipo === 'insumo' ? qtdEstoque(i) : n(i.qtd) ?? 1,
         unidade: i.tipo === 'insumo' ? i.unidade : 'un',
@@ -823,6 +900,7 @@ export default function CompraForm() {
         embalagens: i.tipo === 'insumo' && i.padrao != null && fatorEmb(i) !== 1 ? n(i.qtd) : null,
         conteudo_embalagem: i.tipo === 'insumo' && i.padrao != null && fatorEmb(i) !== 1 ? n(i.conteudo) : null,
         valor_total: n(i.total),
+        desconto: i.tipo === 'insumo' ? n(i.desc) ?? 0 : 0,
         lote_fabricacao: i.tipo === 'insumo' ? i.lote : null,
         validade: i.tipo === 'insumo' && i.validade ? paraBanco(i.validade) : null,
         estoque_minimo: i.tipo === 'insumo' && i.minimo.trim() ? n(i.minimo) : null,
@@ -831,7 +909,7 @@ export default function CompraForm() {
         icms_st: n(i.st) ?? 0,
       })),
       rateio: rateio.map((x) => ({ centro_custo_id: x.centroId, percentual: n(x.perc) })),
-      parcelas: parcelas.map((x) => ({ vencimento: paraBanco(x.venc), valor: n(x.valor) })),
+      parcelas: juntarParcelas(parcelas, forma[0] === 'prazo' ? interm : []),
       fretes_de: transportadas.map((x) => x.id),
     };
     // Compra nova parecida com uma já gravada: pergunta antes (vale também para a digitada à mão).
@@ -862,6 +940,17 @@ export default function CompraForm() {
     if (error) return setErro(traduzirErro(error));
     const res = r as { id: string; numero: number; total: number; frete_aparte?: number };
     let extra = '';
+    if (contaImob) {
+      // V178: a compra e os títulos dela ficam na conta do Ativo Imobilizado (não vão para a despesa)
+      const [u1, u2] = await Promise.all([
+        supabase.from('compras').update({ conta_contabil_id: contaImob }).eq('id', res.id),
+        supabase.from('lancamentos').update({ conta_contabil_id: contaImob }).eq('compra_id', res.id),
+      ]);
+      const eImob = u1.error ?? u2.error;
+      extra += eImob
+        ? ` Atenção: a compra foi gravada, mas a conta do imobilizado não foi aplicada (${traduzirErro(eImob)}).`
+        : ` Bem no Ativo Imobilizado (${nomeContaImob ?? 'conta escolhida'}). Para a depreciação, cadastre o bem em Mais › Imobilizado › "Veio de uma compra?" nº ${res.numero}.`;
+    }
     if (origem) {
       const vinculos = origem.cnpj
         ? itens
@@ -873,7 +962,8 @@ export default function CompraForm() {
       else if (vinculos.length) extra = ' Os produtos desta nota ficaram aprendidos para a próxima.';
     }
     if (id && voltarDaConsulta(navegacao, params?.abrirId, false)) return;
-    const pagar = parcelas.length === 1 ? '1 conta a pagar lançada' : `${parcelas.length} parcelas lançadas no contas a pagar`;
+    const nInt = forma[0] === 'prazo' ? interm.length : 0;
+    const pagar = parcelas.length + nInt === 1 ? '1 conta a pagar lançada' : nInt ? `${nInt} intermediária${nInt > 1 ? 's' : ''} e ${parcelas.length} parcela${parcelas.length > 1 ? 's' : ''} lançadas no contas a pagar` : `${parcelas.length} parcelas lançadas no contas a pagar`;
     setAviso(
       transportadas.length
         ? `Compra nº ${res.numero} gravada: ${formatarMoeda(res.total)}. Frete de ${formatarMoeda(Number(res.frete_aparte ?? custoFrete))} rateado no custo dos itens da${transportadas.length > 1 ? 's compras' : ' compra'} nº ${listaNumeros(transportadas.map((x) => x.numero))} (o estoque delas já está com o custo novo) e ${pagar}.${extra}`
@@ -948,6 +1038,14 @@ export default function CompraForm() {
         <Text style={estilos.nota2}>Energia, serviço, manutenção, contador, seguro e outras contas que não entram no estoque. Vai direto para a despesa e para o contas a pagar, ou já sai do caixa/banco.</Text>
         <DespesaForm
           abrirId={despesaId}
+          paraProdutos={
+            soDespesa
+              ? undefined
+              : (d, arq) => {
+                  setLeituraPendente({ d, arq });
+                  setModo('produtos');
+                }
+          }
           aoFechar={(motivo) => {
             if (motivo && motivo !== 'saiu' && voltarDaConsulta(navegacao, params?.abrirId, motivo === 'excluiu')) return;
             setDespesaId(null);
@@ -1132,6 +1230,7 @@ export default function CompraForm() {
             opcoes={[
               { valor: 'insumo', rotulo: 'Produto (estoque)' },
               { valor: 'servico', rotulo: 'Serviço / outro' },
+              { valor: 'imobilizado', rotulo: 'Bem do Imobilizado' },
             ]}
             valor={[it.tipo]}
             aoMudar={(v) => mudar(it.chave, { tipo: v[0] as any })}
@@ -1193,7 +1292,19 @@ export default function CompraForm() {
                   })()}
                 </View>
               )}
-              <CampoMoeda rotulo="Valor do item (R$) *" valor={it.total} aoMudar={(t) => mudarTotal(it, t)} erro={erros[`t${k}`]} />
+              <View style={estilos.linha}>
+                <View style={{ flex: 1 }}>
+                  <CampoMoeda rotulo="Desconto do item (R$)" valor={it.desc} aoMudar={(t) => mudarQtdOuUnit(it, 'desc', t)} placeholder="0,00" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <CampoMoeda rotulo="Valor do item (R$) *" valor={it.total} aoMudar={(t) => mudarTotal(it, t)} erro={erros[`t${k}`]} />
+                </View>
+              </View>
+              {(n(it.desc) ?? 0) > 0 && n(it.qtd) && n(it.unit) ? (
+                <Text style={estilos.nota2}>
+                  {formatarQtd(n(it.qtd)!)} × {formatarMoeda(n(it.unit))} = {formatarMoeda(r2(n(it.qtd)! * n(it.unit)!))} − desconto {formatarMoeda(n(it.desc))} = {formatarMoeda(n(it.total))}
+                </Text>
+              ) : null}
               <View style={estilos.linha}>
                 <View style={{ flex: 1 }}>
                   <Campo rotulo="Lote do fabricante" value={it.lote} onChangeText={(t) => mudar(it.chave, { lote: t })} autoCapitalize="characters" />
@@ -1215,7 +1326,13 @@ export default function CompraForm() {
             </>
           ) : (
             <>
-              <Campo rotulo="Descrição *" value={it.descricao} onChangeText={(t) => mudar(it.chave, { descricao: t })} autoCapitalize="sentences" placeholder="Ex.: Frete da nota, montagem, instalação" erro={erros[`p${k}`]} />
+              {it.tipo === 'imobilizado' && (
+                <>
+                  <ContaImobilizado valor={it.contaId ?? null} aoMudar={(cid, nomeC) => mudar(it.chave, { contaId: cid, contaNome: nomeC })} erro={erros[`c${k}`]} />
+                  <Text style={estilos.nota2}>O bem não entra no estoque nem na despesa: vai para o Ativo Imobilizado, na conta escolhida. Depois, cadastre-o em Mais › Imobilizado › "Veio de uma compra?" com o nº desta compra, para a depreciação.</Text>
+                </>
+              )}
+              <Campo rotulo="Descrição *" value={it.descricao} onChangeText={(t) => mudar(it.chave, { descricao: t })} autoCapitalize="sentences" placeholder={it.tipo === 'imobilizado' ? 'Ex.: Trator John Deere 6110J, jogo de ferramentas' : 'Ex.: Frete da nota, montagem, instalação'} erro={erros[`p${k}`]} />
               <CampoMoeda rotulo="Valor (R$) *" valor={it.total} aoMudar={(t) => mudar(it.chave, { total: t })} erro={erros[`t${k}`]} />
             </>
           )}
@@ -1238,9 +1355,8 @@ export default function CompraForm() {
           )}
         </View>
       ))}
-      <Text style={estilos.link} onPress={() => setItens((l) => [...l, itemVazio()])}>
-        + Adicionar item
-      </Text>
+      <Botao titulo={`+ Adicionar outro item (${itens.length} até agora)`} tipo="secundario" onPress={() => setItens((l) => [...l, itemVazio()])} />
+      <Text style={estilos.nota2}>Cada produto num item separado: é assim que o estoque de cada um fica certo.</Text>
 
       {/* ---------- totais ---------- */}
       <View style={estilos.linha}>
@@ -1259,7 +1375,8 @@ export default function CompraForm() {
           <CampoMoeda rotulo="Acréscimo financeiro" valor={acrescimo} aoMudar={setAcrescimo} />
         </View>
       </View>
-      <CampoMoeda rotulo="Desconto" valor={desconto} aoMudar={setDesconto} />
+      <CampoMoeda rotulo="Desconto geral da nota (rateado pelo valor de cada item)" valor={desconto} aoMudar={setDesconto} />
+      <Text style={estilos.nota2}>Desconto de um item só vai no próprio item. Aqui fica o desconto dado sobre a compra toda: ele é dividido entre os itens na proporção do valor de cada um e abate o custo de cada produto.</Text>
       {(somaIpi > 0 || somaSt > 0) && (
         <Text style={estilos.nota2}>
           Somados dos itens: {somaIpi > 0 ? `IPI ${formatarMoeda(somaIpi)}` : ''}
@@ -1273,7 +1390,7 @@ export default function CompraForm() {
           {comprador && <Text style={estilos.nota2}>Créditos de {comprador.nome}: {[comprador.credito_icms && 'ICMS', comprador.credito_ipi && 'IPI', comprador.credito_pis_cofins && 'PIS/COFINS'].filter(Boolean).join(', ') || 'nenhum'}</Text>}
           {itens.map((it, k) => {
             const c = custos[k];
-            const nome = it.tipo === 'servico' ? it.descricao : it.nota?.descricao ?? it.descricao;
+            const nome = it.tipo !== 'insumo' ? it.descricao : it.nota?.descricao ?? it.descricao;
             return (
               <View key={it.chave} style={{ gap: 2 }}>
                 <Text style={estilos.custoItem}>
@@ -1344,33 +1461,31 @@ export default function CompraForm() {
         aoMudar={setForma}
       />
       {forma[0] === 'prazo' && (
-        <View style={estilos.linha}>
-          <View style={{ width: 80 }}>
-            <Campo rotulo="Parcelas" value={nParc} onChangeText={(t) => setNParc(t.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" />
+        <>
+          <View style={estilos.linha}>
+            <View style={{ width: 80 }}>
+              <Campo rotulo="Parcelas" value={nParc} onChangeText={(t) => setNParc(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
+            </View>
+            <CampoQtdeIntermediarias valor={nInterm} aoMudar={setNInterm} />
+            <View style={{ width: 90 }}>
+              <Campo rotulo="A cada (dias)" value={intervalo} onChangeText={(t) => setIntervalo(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <CampoData rotulo="1º vencimento" valor={primeiro} aoMudar={setPrimeiro} />
-          </View>
-          <View style={{ width: 90 }}>
-            <Campo rotulo="A cada (dias)" value={intervalo} onChangeText={(t) => setIntervalo(t.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" />
-          </View>
-        </View>
+          <CampoData rotulo="1º vencimento das parcelas" valor={primeiro} aoMudar={setPrimeiro} />
+        </>
       )}
-      {parcelas.map((x, k) => (
-        <View key={x.chave} style={estilos.linha}>
-          <Text style={estilos.parcNum}>{k + 1}ª</Text>
-          <View style={{ flex: 1 }}>
-            <CampoData rotulo="Vencimento" valor={x.venc} aoMudar={(t) => setParcelas((l) => l.map((y) => (y.chave === x.chave ? { ...y, venc: t } : y)))} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <CampoMoeda rotulo="Valor" valor={x.valor} aoMudar={(t) => setParcelas((l) => l.map((y) => (y.chave === x.chave ? { ...y, valor: t } : y)))} />
-          </View>
-        </View>
-      ))}
-      {parcelas.length > 1 && (
-        <Text style={[estilos.soma, Math.abs(somaParcelas - total) > 0.009 && { color: cores.erro }]}>Parcelas somam {formatarMoeda(somaParcelas)}</Text>
-      )}
-      {erros.parcelas && <Text style={estilos.erro}>{erros.parcelas}</Text>}
+      <ParcelasIntermediarias
+        normais={parcelas}
+        setNormais={setParcelas}
+        interm={forma[0] === 'prazo' ? interm : []}
+        setInterm={setInterm}
+        fixo={fixo}
+        setFixo={setFixo}
+        total={total}
+        rotuloTotal="o total da compra"
+        erro={erros.parcelas}
+        mostrarUma
+      />
 
       <Campo rotulo="Observações" value={obs} onChangeText={setObs} multiline style={{ minHeight: 72, paddingTop: 12, textAlignVertical: 'top' }} />
 

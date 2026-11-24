@@ -6,6 +6,7 @@ import Linha from '../../componentes/Linha';
 import Resumo from '../../componentes/Resumo';
 import ResultadoBusca from '../../componentes/ResultadoBusca';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
+import { planoCompleto } from '../../lib/planoTodo';
 import { ROTULO_TIPO_CONTA, caminho, nivelDe, semAcento, type Conta } from '../../lib/planoContas';
 
 const MAXIMO = 1000;
@@ -23,7 +24,7 @@ export default function ConsultaContas() {
 
   useFocusEffect(
     useCallback(() => {
-      consulta<Conta[]>(supabase.from('plano_contas').select('id, codigo, nome, tipo, conta_pai_id, analitica, ativa').order('codigo'))
+      planoCompleto<Conta>('id, codigo, nome, tipo, conta_pai_id, analitica, ativa')
         .then(setContas)
         .catch((e) => setErro(traduzirErro(e)));
     }, []),
@@ -48,7 +49,7 @@ export default function ConsultaContas() {
   return (
     <>
       {contas && <Resumo esquerda={`${contas.length} contas no plano`} direita={`${analiticas} recebem lançamentos`} />}
-      <Busca valor={busca} aoMudar={(t) => { setBusca(t); if (t) setTudo(false); }} dica="Nome ou código (ex.: adubo, 4.1.01)" />
+      <Busca valor={busca} aoMudar={(t) => { setBusca(t); if (t) setTudo(false); }} dica="Nome ou código (ex.: adubo, 4.01.01)" />
       {!busca.trim() && <Botao titulo={tudo ? 'Fechar o plano completo' : 'Ver o plano completo'} tipo="secundario" onPress={() => setTudo(!tudo)} />}
       <ResultadoBusca
         termo={termo === '*' ? 'plano completo' : termo}
@@ -56,7 +57,7 @@ export default function ConsultaContas() {
         buscando={contas === null}
         erro={erro}
         maximo={MAXIMO}
-        dica={'Digite parte do nome da conta, ou o começo do código para ver um grupo inteiro: 3 mostra as receitas, 4.1.01 os custos da produção. Para alterar uma conta, use Cadastrar › Alterar uma conta já cadastrada.'}
+        dica={'Digite parte do nome da conta, ou o começo do código para ver um grupo inteiro: 3 mostra as receitas, 4.01.01 os custos agrícolas da primeira fazenda. Para alterar uma conta, use Cadastrar › Alterar uma conta já cadastrada.'}
         refinar="do nome ou do código"
         item={(c: Conta) => {
           const nivel = nivelDe(c.codigo);

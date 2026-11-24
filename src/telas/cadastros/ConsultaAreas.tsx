@@ -1,4 +1,6 @@
 import React, { useCallback, useState } from 'react';
+import { Text } from 'react-native';
+import { cores, tam } from '../../tema';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Busca from '../../componentes/Busca';
 import Linha from '../../componentes/Linha';
@@ -7,6 +9,7 @@ import ResultadoBusca from '../../componentes/ResultadoBusca';
 import { useSessao } from '../../contexto/SessaoContext';
 import { consulta, supabase } from '../../lib/supabase';
 import { formatarNumero } from '../../lib/formatos';
+import { textoInundacao } from '../../lib/mangas';
 import { limparBusca, useBusca } from '../../lib/useBusca';
 import { NOMES_AREA } from '../../lib/areas';
 import type { NavPilha, TipoArea } from '../../navegacao/rotas';
@@ -21,6 +24,9 @@ export default function ConsultaAreas({ tipo }: { tipo: TipoArea }) {
   const fid = fazendaAtiva?.id;
   const [busca, setBusca] = useState('');
   const [resumo, setResumo] = useState<{ qtd: number; ha: number } | null>(null);
+  // V197: cabeças na manga e quantidade estimada (capacidade da estação de agora)
+  const [lot, setLot] = useState<Record<string, { cabecas: number; estimado: number | null }>>({});
+  const [estacao, setEstacao] = useState<string>('aguas');
   const termo = limparBusca(busca);
 
   useFocusEffect(
@@ -36,6 +42,12 @@ export default function ConsultaAreas({ tipo }: { tipo: TipoArea }) {
           const d = (data ?? []) as { area_ha: number | null }[];
           setResumo({ qtd: d.length, ha: d.reduce((s, a) => s + Number(a.area_ha ?? 0), 0) });
         });
+      if (tipo === 'manga')
+        supabase.rpc('mangas_lotacao', { p_fazenda: fid }).then(({ data }) => {
+          const l = (data ?? []) as any[];
+          setLot(Object.fromEntries(l.map((x) => [x.area_id, { cabecas: Number(x.cabecas ?? 0), estimado: x.estimado_cab != null ? Number(x.estimado_cab) : null }])));
+          if (l[0]?.estacao) setEstacao(l[0].estacao);
+        });
     }, [fid, tipo]),
   );
 
@@ -44,7 +56,7 @@ export default function ConsultaAreas({ tipo }: { tipo: TipoArea }) {
       const areas = await consulta<any[]>(
         supabase
           .from('areas')
-          .select('id, nome, area_ha, capim_cultura, ativa, capacidade_aguas, capacidade_seca, indicacao_uso, topografia')
+          .select('id, nome, area_ha, capim_cultura, ativa, capacidade_aguas, capacidade_seca, indicacao_uso, topografia, inundacao_tipo, inundacao_perc, inundacao_risco')
           .eq('fazenda_id', fid!)
           .eq('tipo', tipo)
           .or(tipo === 'manga' ? `nome.ilike.*${t}*,capim_cultura.ilike.*${t}*,indicacao_uso.ilike.*${t}*` : `nome.ilike.*${t}*,capim_cultura.ilike.*${t}*`)
@@ -74,12 +86,31 @@ export default function ConsultaAreas({ tipo }: { tipo: TipoArea }) {
   );
   const { achados, buscando, erro } = useBusca(termo, buscar, { listarTudo: true });
 
+  function lotacao(a: any) {
+    const l = lot[a.id];
+    const cab = l?.cabecas ?? a.cabecas ?? 0;
+    const est = l?.estimado;
+    const dif = est != null ? cab - est : null;
+    return (
+      <Text style={{ fontSize: tam.pequeno, color: cores.textoSuave }}>
+        {`Agora: ${formatarNumero(cab)} cab.`}
+        {est != null ? ` · Estimado: ${formatarNumero(est)} cab.` : ' · Estimado: informe o capim'}
+        {dif != null && dif > 0 ? <Text style={{ color: '#B3261E', fontWeight: '800' }}>{` · ${formatarNumero(dif)} a maior`}</Text> : null}
+        {dif != null && dif < 0 ? ` · ${formatarNumero(-dif)} a menor` : null}
+      </Text>
+    );
+  }
+
   return (
     <>
       {resumo && (
         <Resumo
-          esquerda={`${resumo.qtd} ${resumo.qtd === 1 ? nomes.singular : nomes.plural.toLowerCase()} ativ${nomes.artigo}${resumo.qtd === 1 ? '' : 's'}`}
-          direita={`${formatarNumero(resumo.ha, 2)} ha no total`}
+          esquerda={`${resumo.qtd} ${resumo.qtd === 1 ? nomes.singular : nomes.plural.toLowerCase()} ativ${nomes.artigo}${resumo.qtd === 1 ? '' : 's'} · ${formatarNumero(resumo.ha, 2)} ha`}
+          direita={
+            tipo === 'manga'
+              ? `${formatarNumero(Object.values(lot).reduce((s, x) => s + x.cabecas, 0))} cab. · estimado ${formatarNumero(Object.values(lot).reduce((s, x) => s + (x.estimado ?? 0), 0))} cab. (${estacao === 'aguas' ? 'águas' : 'seca'})`
+              : `${formatarNumero(resumo.ha, 2)} ha no total`
+          }
         />
       )}
       <Busca valor={busca} aoMudar={setBusca} dica={tipo === 'manga' ? 'Nome, capim ou uso' : `Nome ou ${nomes.cultura.toLowerCase()}`} />
@@ -100,13 +131,14 @@ export default function ConsultaAreas({ tipo }: { tipo: TipoArea }) {
               tipo === 'manga'
                 ? [
                     [a.capim_cultura, a.indicacao_uso, a.topografia].filter(Boolean).join(' • ') || null,
+                    textoInundacao(a) ? `Risco de inundação: ${textoInundacao(a)}` : null,
                     a.capacidade_aguas != null || a.capacidade_seca != null
                       ? `Capacidade (UA/ha): ${a.capacidade_aguas != null ? formatarNumero(a.capacidade_aguas, 2) : '–'} águas, ${a.capacidade_seca != null ? formatarNumero(a.capacidade_seca, 2) : '–'} seca`
                       : null,
-                    `Agora: ${formatarNumero(a.cabecas ?? 0)} cab.`,
                   ]
                 : [a.capim_cultura]
             }
+            extra={tipo === 'manga' ? lotacao(a) : undefined}
             direita={a.area_ha !== null ? `${formatarNumero(a.area_ha, 2)} ha` : undefined}
             onPress={() => (tipo === 'manga' ? navegacao.navigate('MangaDetalhe', { id: a.id }) : navegacao.navigate('AreaForm', { tipo, id: a.id }))}
           />

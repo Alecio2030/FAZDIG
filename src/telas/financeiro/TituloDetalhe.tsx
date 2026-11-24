@@ -12,6 +12,7 @@ import { doBanco } from '../../lib/datas';
 import { formatarMoeda, formatarNumero } from '../../lib/formatos';
 import { abrirFotoDocumento } from '../../lib/documentos';
 import { excluirComEstorno } from '../../lib/excluir';
+import { perguntar } from '../../lib/perguntar';
 import { Alert } from '../../lib/alerta';
 import { ROTULO_BAIXA, saldoTitulo, textoCompetencia, textoPrazo, textosTitulo, um } from '../../lib/titulos';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
@@ -28,6 +29,7 @@ export default function TituloDetalhe() {
   const [baixas, setBaixas] = useState<any[]>([]);
   const [erro, setErro] = useState<string | null>(null);
   const [excluindo, setExcluindo] = useState(false);
+  const [grupo, setGrupo] = useState(0); // V171: parcelas do mesmo lançamento
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: t ? `Título nº ${t.numero}` : 'Título' });
@@ -41,7 +43,7 @@ export default function TituloDetalhe() {
             consulta<any>(
               supabase
                 .from('lancamentos')
-                .select('*, pessoa:pessoas ( nome ), compra:compras ( id, numero ), venda:vendas ( id, numero ), conta:plano_contas ( nome ), banco:contas_bancarias ( nome ), rateio:lancamento_rateios ( percentual, centro:centros_custo ( codigo, nome ) )')
+                .select('*, pessoa:pessoas ( nome ), compra:compras ( id, numero ), venda:vendas ( id, numero ), conta:plano_contas!conta_contabil_id ( nome ), banco:contas_bancarias ( nome ), rateio:lancamento_rateios ( percentual, centro:centros_custo ( codigo, nome ) )')
                 .eq('id', params.id)
                 .single(),
             ),
@@ -49,6 +51,8 @@ export default function TituloDetalhe() {
           ]);
           setT(tit);
           setBaixas(bs);
+          const { data: g } = await supabase.rpc('contar_grupo_titulo', { p_id: params.id });
+          setGrupo(Number(g ?? 0));
         } catch (e) {
           setErro(traduzirErro(e));
         }
@@ -82,6 +86,39 @@ export default function TituloDetalhe() {
       },
     ]);
   }
+  // V171: parcelas do mesmo lançamento, todas de uma vez
+  function excluirGrupo() {
+    Alert.alert('Excluir o lançamento', `Excluir as ${grupo} parcelas deste lançamento (${t.descricao ?? 'sem descrição'})?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: `Excluir as ${grupo}`,
+        style: 'destructive',
+        onPress: async () => {
+          setExcluindo(true);
+          const { erro: e } = await excluirComEstorno(() => supabase.rpc('excluir_titulos_grupo', { p_id: t.id }), 'grupo', t.id);
+          setExcluindo(false);
+          if (e) return setErro(e);
+          navegacao.goBack();
+        },
+      },
+    ]);
+  }
+  // V171: título já pago ou pago em parte também se altera: estorna o pagamento e abre para alterar
+  async function alterar() {
+    const ativos = baixas.filter((b) => b.situacao === 'pendente' || b.situacao === 'confirmada');
+    if (ativos.length) {
+      const ok = await perguntar(
+        `Já tem ${tx.pagamento}`,
+        `Este título tem ${ativos.length === 1 ? `um ${tx.pagamento}` : `${ativos.length} ${tx.pagamentos}`} de ${formatarMoeda(ativos.reduce((s, b) => s + Number(b.valor_pago ?? 0), 0))}. Para alterar, o sistema estorna (o valor volta para o caixa/banco) e o título fica em aberto; depois de alterar, dê a baixa de novo. Só o Produtor e o Administrador podem fazer isso.`,
+        'Estornar e alterar',
+        'Voltar',
+      );
+      if (!ok) return;
+      const { error } = await supabase.rpc('estornar_pagamentos', { p_campo: 'id', p_id: t.id });
+      if (error) return setErro(traduzirErro(error));
+    }
+    navegacao.push('TituloForm', { tipo: t.tipo === 'receber' ? 'receber' : 'pagar', aba: 'lancar', numero: t.numero });
+  }
   const abrir = async (caminho: string, oque: string) => !(await abrirFotoDocumento(caminho)) && setErro(`Não foi possível abrir ${oque}.`);
 
   return (
@@ -112,7 +149,7 @@ export default function TituloDetalhe() {
       <Dado rotulo={tx.pessoa} valor={um(t.pessoa)?.nome} />
       <Dado rotulo="Nº do documento" valor={t.documento} />
       <Dado rotulo="Data de emissão" valor={doBanco(t.data_emissao)} />
-      {t.total_parcelas > 1 ? <Dado rotulo="Parcela" valor={`${t.parcela} de ${t.total_parcelas}`} /> : null}
+      {t.intermediaria ? <Dado rotulo="Parcela intermediária" valor={`${t.parcela} de ${t.total_parcelas}`} /> : t.total_parcelas > 1 ? <Dado rotulo="Parcela" valor={`${t.parcela} de ${t.total_parcelas}`} /> : null}
       {t.vencimento_original && t.vencimento_original !== t.data_vencimento ? <Dado rotulo="Vencimento original" valor={doBanco(t.vencimento_original)} /> : null}
       {t.recorrencia_id ? <Dado rotulo="Conta contínua" valor={`Mês ${textoCompetencia(t.competencia)}${t.previsto ? ' · valor previsto' : ''}`} /> : null}
       {um(t.compra) ? (
@@ -181,10 +218,10 @@ export default function TituloDetalhe() {
       <Dado rotulo="Observações" valor={t.observacoes} />
 
       {/* V149: alterar ou excluir daqui mesmo (o título avulso) ou pelo lançamento de origem */}
-      {avulso && t.situacao !== 'pago' && t.situacao !== 'cancelado' && (
-        <Botao titulo="✏️  Alterar este título" tipo="secundario" onPress={() => navegacao.push('TituloForm', { tipo: t.tipo === 'receber' ? 'receber' : 'pagar', aba: 'lancar', numero: t.numero })} />
-      )}
-      {avulso && <Botao titulo="Excluir este título" tipo="perigo" onPress={excluir} carregando={excluindo} />}
+      {avulso && t.situacao !== 'cancelado' && <Botao titulo="✏️  Alterar este título" tipo="secundario" onPress={alterar} />}
+      {avulso && <Botao titulo={grupo > 1 ? 'Excluir só esta parcela' : 'Excluir este título'} tipo="perigo" onPress={excluir} carregando={excluindo} />}
+      {avulso && grupo > 1 && <Botao titulo={`Excluir as ${grupo} parcelas deste lançamento`} tipo="perigo" onPress={excluirGrupo} carregando={excluindo} />}
+      {um(t.venda) ? <Botao titulo={`✏️  Ver a venda nº ${um(t.venda).numero} (excluir para lançar de novo)`} tipo="secundario" onPress={() => navegacao.push('VendaDetalhe', { id: um(t.venda).id })} /> : null}
       {um(t.compra) ? <Botao titulo={`✏️  Alterar ou excluir pela compra nº ${um(t.compra).numero}`} tipo="secundario" onPress={() => navegacao.push('CompraForm', { abrirId: um(t.compra).id })} /> : null}
       {t.financiamento_id ? <Botao titulo="✏️  Ver o financiamento (alterar ou excluir)" tipo="secundario" onPress={() => navegacao.push('FinanciamentoForm', { abrirId: t.financiamento_id })} /> : null}
       {t.frete_id ? <Text style={estilos.nota}>Título de frete: altere ou exclua em Frota › Fretes.</Text> : null}

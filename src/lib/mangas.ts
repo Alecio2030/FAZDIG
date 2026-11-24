@@ -118,3 +118,12 @@ export async function sugestoesServico(): Promise<string[]> {
   );
   return juntar(d.map((x) => x.servico), ['Troca de arame', 'Troca de mourões', 'Esticar arame', 'Roçada da linha da cerca']);
 }
+
+/** V198: risco de inundação da manga — texto para detalhe e consulta ("Parcial (30%) · risco alto"). */
+export const NIVEIS_RISCO: Record<string, string> = { baixo: 'Baixo', medio: 'Médio', alto: 'Alto' };
+export function textoInundacao(a: { inundacao_tipo?: string | null; inundacao_perc?: number | null; inundacao_risco?: string | null }): string | null {
+  if (!a.inundacao_tipo || a.inundacao_tipo === 'nenhum') return null;
+  const tipo = a.inundacao_tipo === 'total' ? 'Total' : `Parcial${a.inundacao_perc != null ? ` (${formatarNumero(Number(a.inundacao_perc), 0)}% da área)` : ''}`;
+  const nivel = a.inundacao_risco ? ` · risco ${NIVEIS_RISCO[a.inundacao_risco]?.toLowerCase() ?? a.inundacao_risco}` : '';
+  return `${tipo}${nivel}`;
+}

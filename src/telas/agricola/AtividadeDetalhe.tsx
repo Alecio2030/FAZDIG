@@ -65,7 +65,9 @@ export default function AtividadeDetalhe() {
   const custoMaq = Number(a.custo_maquina ?? 0);
   const custo = custoProd + custoOperacao(a);
   const estimado = itens.some((i: any) => i.baixou && i.custo_unitario == null);
-  const dur = duracaoHoras(horaDoBanco(a.hora_inicio), horaDoBanco(a.hora_fim));
+  // V198: vários dias/horários: soma de todos
+  const periodos: any[] = Array.isArray(a.periodos) ? a.periodos : [];
+  const dur = a.horas_total != null ? Number(a.horas_total) : duracaoHoras(horaDoBanco(a.hora_inicio), horaDoBanco(a.hora_fim));
   const maq = um(a.maquina);
   const imp = um(a.implemento);
 
@@ -82,7 +84,7 @@ export default function AtividadeDetalhe() {
         <View style={estilos.cards}>
           <Card rotulo="Área" valor={ha ? `${formatarNumero(ha, 2)} ha` : VAZIO} detalhe={areas.length > 1 ? `${areas.length} locais` : undefined} />
           <Card rotulo="Custo da atividade" valor={formatarMoeda(custo)} detalhe={ha && custo ? `${formatarMoeda(custo / ha)}/ha` : undefined} />
-          {dur != null && <Card rotulo="Duração" valor={textoHoras(dur)} detalhe={ha ? `${formatarNumero(ha / dur, 2)} ha/h` : undefined} />}
+          {dur != null && <Card rotulo={a.dias > 1 ? `Duração · ${a.dias} dias` : 'Duração'} valor={textoHoras(dur)} detalhe={ha ? `${formatarNumero(ha / dur, 2)} ha/h` : undefined} />}
           {plantas > 0 && <Card rotulo="Plantas" valor={formatarNumero(plantas)} />}
         </View>
         {(custoMO > 0 || custoMaq > 0) && (
@@ -150,7 +152,14 @@ export default function AtividadeDetalhe() {
       )}
 
       <Secao titulo="Execução" />
-      <Dado rotulo="Horário" valor={a.hora_inicio ? `${horaDoBanco(a.hora_inicio)} às ${horaDoBanco(a.hora_fim) || '?'}` : null} />
+      {periodos.length > 1 ? (
+        periodos.map((x, k) => (
+          <Dado key={k} rotulo={`${k + 1}º dia · ${doBanco(x.data)}`} valor={`${x.inicio} às ${x.fim}${x.horas != null ? ` (${textoHoras(Number(x.horas))})` : ''}`} />
+        ))
+      ) : (
+        <Dado rotulo="Horário" valor={a.hora_inicio ? `${horaDoBanco(a.hora_inicio)} às ${horaDoBanco(a.hora_fim) || '?'}` : null} />
+      )}
+      {periodos.length > 1 && <Dado rotulo="Total" valor={`${a.dias} ${a.dias === 1 ? 'dia' : 'dias'} · ${textoHoras(dur)}`} />}
       <Dado rotulo="Máquina" valor={maq ? `${maq.nome} (bem nº ${maq.numero})` : null} />
       <Dado rotulo="Implemento" valor={imp ? `${imp.nome} (bem nº ${imp.numero})` : null} />
       <Dado rotulo="Horas de máquina" valor={a.horas_maquina != null ? textoHoras(Number(a.horas_maquina)) : null} />

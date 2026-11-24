@@ -13,7 +13,7 @@ import { useSessao } from '../../contexto/SessaoContext';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
 import { doBanco, hojeBR } from '../../lib/datas';
 import { formatarNumero } from '../../lib/formatos';
-import { CATEGORIAS, ORDEM_CATEGORIAS, ROTULO_MANEJO, nomeEstrutura, textoManejo, type Categoria } from '../../lib/mangas';
+import { CATEGORIAS, ORDEM_CATEGORIAS, ROTULO_MANEJO, nomeEstrutura, textoInundacao, textoManejo, type Categoria } from '../../lib/mangas';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -28,6 +28,8 @@ export default function MangaDetalhe() {
   const [estruturas, setEstruturas] = useState<any[]>([]);
   const [manejos, setManejos] = useState<any[]>([]);
   const [cabecas, setCabecas] = useState(0);
+  // V195: estimativa pelo capim, área e gado (sequeiro), nas águas e na seca
+  const [est, setEst] = useState<any>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   // lançamento aberto: id da estrutura
@@ -56,6 +58,8 @@ export default function MangaDetalhe() {
         cab = count ?? 0;
       }
       setA(area);
+      const { data: e } = await supabase.rpc('manga_estimativa', { p_area: params.id });
+      setEst(e ?? null);
       setEstruturas(est.sort((x, y) => ORDEM_CATEGORIAS.indexOf(x.categoria) - ORDEM_CATEGORIAS.indexOf(y.categoria)));
       setManejos(man);
       setCabecas(cab);
@@ -141,8 +145,58 @@ export default function MangaDetalhe() {
     ],
     ['Período de descanso', a.descanso_dias != null ? `${a.descanso_dias} dias` : null],
     ['Topografia', a.topografia],
+    ['Risco de inundação', textoInundacao(a)],
     ['Medidas e observações', a.medidas],
   ];
+
+  function estimativa() {
+    if (!est) return null;
+    if (!est.capim_reconhecido)
+      return (
+        <>
+          <Secao titulo="Estimativa (sequeiro)" />
+          <Aviso tipo="info" texto="Escolha o capim no cadastro da manga (Editar cadastro) para o sistema calcular a capacidade nas águas e na seca." />
+        </>
+      );
+    const ag = est.aguas ?? {};
+    const se = est.seca ?? {};
+    const n = (v: any, c = 0) => (v != null ? formatarNumero(Number(v), c) : '–');
+    const linha = (rot: string, x: string, y: string, negrito = false) => (
+      <View key={rot} style={estilos.linhaTab}>
+        <Text style={[estilos.cel1, negrito && estilos.cab]}>{rot}</Text>
+        <Text style={[estilos.cel, negrito && estilos.cab]}>{x}</Text>
+        <Text style={[estilos.cel, negrito && estilos.cab]}>{y}</Text>
+      </View>
+    );
+    const l = est.lotacao ?? {};
+    const sit = SITUACAO[l.situacao] ?? SITUACAO.vazia;
+    const estAgora = est.estacao_agora === 'aguas' ? 'águas' : 'seca';
+    return (
+      <>
+        <Secao titulo={`Estimativa (sequeiro) · ${est.capim} · fertilidade ${est.fertilidade === 'boa' ? 'boa' : est.fertilidade === 'fraca' ? 'fraca' : 'média'}`} />
+        <View style={estilos.cartao}>
+          {linha('', 'Águas', 'Seca', true)}
+          {linha('Biomassa (kg MS/ha)', n(ag.biomassa_kg_ha), n(se.biomassa_kg_ha))}
+          {linha('Capacidade (UA/ha)', n(ag.ua_ha, 2), n(se.ua_ha, 2))}
+          {linha('Capacidade na manga (UA)', n(ag.ua, 1), n(se.ua, 1))}
+          {linha('GMD esperado (kg/dia)', n(ag.gmd, 2), n(se.gmd, 2))}
+          {linha('Período de descanso (dias)', n(ag.descanso), n(se.descanso))}
+          {linha('Altura entrada / saída (cm)', `${n(ag.altura_entrada)} / ${n(ag.altura_saida)}`, `${n(se.altura_entrada)} / ${n(se.altura_saida)}`)}
+          {linha('Capacidade em cabeças', 'Águas', 'Seca', true)}
+          {FAIXAS.map(([k, rot]) => linha(rot, n(ag.cabecas?.[k]), n(se.cabecas?.[k])))}
+        </View>
+        <Secao titulo={`Lotação agora (${estAgora})`} />
+        <View style={estilos.cartao}>
+          <Text style={[estilos.valor, { color: sit.cor }]}>{sit.texto}</Text>
+          {linha('Cabeças na manga', n(l.cabecas), '')}
+          {linha('UA na manga', n(l.ua, 2), '')}
+          {linha('Capacidade agora (UA)', n(l.capacidade_ua, 1), '')}
+          {l.dias_ocupacao != null && linha('Ocupação prevista (dias)', n(l.dias_ocupacao), '')}
+          {l.sair_em && linha('Tirar o gado em', doBanco(l.sair_em), '')}
+        </View>
+      </>
+    );
+  }
 
   return (
     <Tela atualizando={false} aoAtualizar={carregar}>
@@ -160,6 +214,8 @@ export default function MangaDetalhe() {
             </View>
           ))}
       </View>
+
+      {estimativa()}
 
       <Secao titulo="Bebedouros, cochos e cercas" />
       {estruturas.length === 0 && <Text style={estilos.nota}>Nenhum cadastrado. Inclua em "Editar cadastro".</Text>}
@@ -233,7 +289,22 @@ export default function MangaDetalhe() {
   );
 }
 
+const FAIXAS: [string, string][] = [
+  ['M0', 'Machos 0 a 12 meses'], ['M13', 'Machos 13 a 24'], ['M25', 'Machos 25 a 36'], ['M37', 'Machos + 36'],
+  ['F0', 'Fêmeas 0 a 2 meses'], ['F3', 'Fêmeas 3 a 8'], ['F9', 'Fêmeas 9 a 12'], ['F13', 'Fêmeas 13 a 24'], ['F25', 'Fêmeas 25 a 36'], ['F37', 'Fêmeas + 36'],
+];
+const SITUACAO: Record<string, { texto: string; cor: string }> = {
+  acima: { texto: 'Acima da capacidade', cor: '#B3261E' },
+  dentro: { texto: 'Dentro da capacidade', cor: '#2E7D32' },
+  abaixo: { texto: 'Abaixo da capacidade (sobra pasto)', cor: '#8D6E00' },
+  vazia: { texto: 'Sem gado', cor: '#56625A' },
+};
+
 const estilos = StyleSheet.create({
+  linhaTab: { flexDirection: 'row', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: cores.borda, alignItems: 'center' },
+  cel1: { flex: 2, fontSize: tam.pequeno + 1, color: cores.texto },
+  cel: { flex: 1, fontSize: tam.pequeno + 1, color: cores.texto, textAlign: 'right' },
+  cab: { fontWeight: '700', color: cores.cafe },
   cartao: { backgroundColor: cores.cartao, borderRadius: tam.raio, borderWidth: 1, borderColor: cores.borda, padding: tam.espaco, gap: 10 },
   par: { gap: 2 },
   rotulo: { fontSize: tam.pequeno, color: cores.textoSuave },

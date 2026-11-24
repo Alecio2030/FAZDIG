@@ -167,7 +167,7 @@ export function eficiencia(b: Balanco, x: { aptidao: Aptidao; gmd?: number | nul
 }
 
 /** Texto da ficha do trato para mandar ao tratador (WhatsApp etc.). */
-export function textoFicha(x: { titulo: string; data: string; cabecas: number; itens: Item[]; b: Balanco }): string {
+export function textoFicha(x: { titulo: string; data: string; cabecas: number; itens: Item[]; b: Balanco; tratos?: number }): string {
   const cab = Math.max(x.cabecas, 0);
   const linhas = x.itens
     .filter((i) => i.kg_mn > 0)
@@ -179,6 +179,10 @@ export function textoFicha(x: { titulo: string; data: string; cabecas: number; i
     ...linhas,
     '',
     `Total: ${formatarNumero(x.b.kgMn, 2)} kg/cab${cab ? ` · ${formatarNumero(x.b.kgMn * cab, 1)} kg por dia` : ''} (matéria natural)`,
+    // V175: quanto vai em cada trato
+    ...(x.tratos && x.tratos > 1
+      ? ['', `EM CADA TRATO (${x.tratos} por dia):`, ...x.itens.filter((i) => i.kg_mn > 0).map((i) => `• ${i.nome}: ${formatarNumero((i.kg_mn * (cab || 1)) / x.tratos!, cab ? 1 : 2)} kg${cab ? '' : '/cab'}`)]
+      : []),
     x.b.custoCab ? `Custo: ${formatarMoeda(x.b.custoCab)}/cab/dia${cab ? ` · ${formatarMoeda(x.b.custoCab * cab)}/dia no lote` : ''}` : '',
   ]
     .filter((l, i, arr) => !(l === '' && arr[i - 1] === ''))

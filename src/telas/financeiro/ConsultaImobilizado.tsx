@@ -36,11 +36,12 @@ type Relacao = 'bens' | 'formacao' | 'mes';
 /** Consulta do imobilizado: pelo nome, código ou nº; bens e valor contábil; depreciação/exaustão do mês por centro. Só mostra. */
 export default function ConsultaImobilizado() {
   const navegacao = useNavigation<NavPilha>();
-  const { fazendaAtiva, fazendas } = useSessao();
+  const { fazendaAtiva, fazendas, modoAdm } = useSessao();
   const fid = fazendaAtiva?.id;
-  // O imobilizado é do Grupo: aparecem todos os bens; o filtro mostra onde cada um está alocado.
+  // V169: dentro de uma fazenda só aparecem os bens alocados nela; no Administrativo, todos, com o filtro de onde está alocado.
+  const naFazenda = !modoAdm && fazendaAtiva?.tipo === 'fazenda';
   const [unidade, setUnidade] = useState<string[]>([TODAS]);
-  const und = unidade[0];
+  const und = naFazenda && fid ? fid : unidade[0];
   const [busca, setBusca] = useState('');
   const [achados, setAchados] = useState<any[] | null>(null);
   const [relacao, setRelacao] = useState<Relacao | null>(null);
@@ -158,7 +159,7 @@ export default function ConsultaImobilizado() {
 
   return (
     <>
-      <Escolha rotulo="Onde está alocado" opcoes={opcoesFiltroUnidade(fazendas)} valor={unidade} aoMudar={setUnidade} />
+      {!naFazenda && <Escolha rotulo="Onde está alocado" opcoes={opcoesFiltroUnidade(fazendas)} valor={unidade} aoMudar={setUnidade} />}
       <Busca valor={busca} aoMudar={(t) => { setBusca(t); if (t) setRelacao(null); }} dica="Nome, código patrimonial ou nº do bem" />
       {erro && <Aviso tipo="erro" texto={erro} />}
       {termo ? (

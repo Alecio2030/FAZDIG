@@ -53,7 +53,7 @@ export default function VeiculoDetalhe() {
       setPlano(si.filter((s) => s.veiculo_id === params.id));
       setAbast(ab);
       setManut(ma);
-      setBem(vei.imobilizado_id ? await consulta<any>(supabase.from('imobilizados').select('id, numero, nome, consumo_l_hora, preco_litro, manutencao_hora').eq('id', vei.imobilizado_id).maybeSingle()) : null);
+      setBem(vei.imobilizado_id ? await consulta<any>(supabase.from('imobilizados').select('id, numero, codigo_patrimonial, nome, consumo_l_hora, preco_litro, manutencao_hora').eq('id', vei.imobilizado_id).maybeSingle()) : null);
     } catch (e) {
       setErro(traduzirErro(e));
     }
@@ -112,7 +112,7 @@ export default function VeiculoDetalhe() {
         <Ionicons name={ICONE_TIPO_VEICULO[v.tipo] ?? 'car-outline'} size={34} color={cores.primaria} />
         <View style={{ flex: 1 }}>
           <Text style={estilos.nome}>
-            Nº {v.numero} · {v.nome}
+            {bem?.codigo_patrimonial ?? `Nº ${v.numero}`} · {v.nome}
             {v.ativo ? '' : '  (fora de uso)'}
           </Text>
           <Text style={estilos.nota}>{[ROTULO_TIPO_VEICULO[v.tipo], v.marca, v.modelo, v.ano, v.placa].filter(Boolean).join(' · ')}</Text>

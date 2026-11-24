@@ -7,6 +7,7 @@ import Linha from '../../componentes/Linha';
 import Lista from '../../componentes/Lista';
 import Secao from '../../componentes/Secao';
 import Botao from '../../componentes/Botao';
+import GtaVenda from '../../componentes/GtaVenda';
 import { Alert } from '../../lib/alerta';
 import { excluirComEstorno } from '../../lib/excluir';
 import { useSessao } from '../../contexto/SessaoContext';
@@ -20,6 +21,7 @@ import { custoPorSacaLotes } from '../../lib/custosCafe';
 import { textoSacas } from '../../lib/posColheita';
 import { rotuloTipo } from '../../lib/armazem';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
+import { TEXTO_SITUACAO, type SituacaoNota } from '../../lib/nfe';
 import { cores, tam } from '../../tema';
 
 const um = (v: any) => (Array.isArray(v) ? v[0] ?? null : v ?? null);
@@ -37,6 +39,7 @@ export default function VendaDetalhe() {
   const [erro, setErro] = useState<string | null>(null);
   const [falha, setFalha] = useState<string | null>(null);
   const [excluindo, setExcluindo] = useState(false);
+  const [notas, setNotas] = useState<any[]>([]);
 
   useLayoutEffect(() => {
     navegacao.setOptions({ title: v ? `Venda nº ${v.numero}` : 'Venda' });
@@ -51,14 +54,27 @@ export default function VendaDetalhe() {
               .from('vendas')
               .select(
                 '*, fazenda:fazendas ( nome, razao_social, cpf_cnpj ), pessoa:pessoas ( nome ), conta:plano_contas ( nome ), banco:contas_bancarias ( nome ), lote:lotes ( numero, descricao ), pesagem:pesagens ( numero ), contrato:cafe_contratos ( id, numero, tipo ),' +
-                  ' itens:venda_itens ( id, tipo_item, descricao, quantidade, unidade, valor_unitario, valor_total, cafe_lote_id, insumo:insumos ( nome ), cafe:cafe_lotes ( numero, especie, tipo, peneira ), armazem:pc_locais ( nome ) ),' +
+                  ' itens:venda_itens ( id, tipo_item, descricao, quantidade, unidade, valor_unitario, valor_total, custo_unitario, custo_total, cafe_lote_id, insumo:insumos ( nome ), cafe:cafe_lotes ( numero, especie, tipo, peneira ), armazem:pc_locais ( nome ),' +
+                  '   ordem, cabecas, sexo, idade_de, idade_ate, peso_kg, peso_liquido_kg, barriga_tipo, barriga_valor, kg_arroba, arrobas, forma_preco, lote_item:lotes ( numero ), raca:racas ( nome ), pesagem_item:pesagens ( numero ) ),' +
                   ' rateio:venda_rateios ( percentual, centro:centros_custo ( codigo, nome ) ),' +
-                  ' parcelas:lancamentos ( id, numero, parcela, valor, valor_pago, data_vencimento, situacao, data_pagamento )',
+                  ' parcelas:lancamentos ( id, numero, parcela, intermediaria, total_parcelas, valor, valor_pago, data_vencimento, situacao, data_pagamento )',
               )
               .eq('id', params.id)
               .single(),
           );
           setV(venda);
+          // V157: notas fiscais desta venda (se o banco ainda não tem a tabela, a ficha segue sem elas)
+          // V203: também as notas que juntaram esta venda com outras
+          supabase
+            .from('nfe_nota_vendas')
+            .select('nota_id')
+            .eq('venda_id', params.id)
+            .then(({ data: lig }) => {
+              const outras = ((lig ?? []) as any[]).map((x) => x.nota_id);
+              let q = supabase.from('nfe_notas').select('id, numero, serie, ambiente, situacao, created_at').order('created_at', { ascending: false });
+              q = outras.length ? q.or(`venda_id.eq.${params.id},id.in.(${outras.join(',')})`) : q.eq('venda_id', params.id);
+              q.then(({ data }) => setNotas(data ?? []));
+            });
           if (venda.tipo === 'cafe') {
             // custo por saca de cada lote vendido (pela origem: talhão e safra); se não der para calcular, a ficha mostra só a venda
             custoPorSacaLotes(venda.fazenda_id, ((venda.itens as any[]) ?? []).map((i) => i.cafe_lote_id).filter(Boolean)).then(setCustos).catch(() => setCustos({}));
@@ -104,7 +120,7 @@ export default function VendaDetalhe() {
 
   const itens = (v.itens as any[]) ?? [];
   const rateio = (v.rateio as any[]) ?? [];
-  const parcelas = ((v.parcelas as any[]) ?? []).sort((a, b) => a.parcela - b.parcela);
+  const parcelas = ((v.parcelas as any[]) ?? []).sort((a, b) => String(a.data_vencimento).localeCompare(String(b.data_vencimento)) || a.parcela - b.parcela);
   const descontos = Number(v.funrural_valor) + Number(v.comissao) + Number(v.frete) + Number(v.outros_descontos);
   const cab = Number(v.cabecas ?? 0);
   const fatorLiquido = Number(v.valor_bruto) > 0 ? Number(v.valor_total) / Number(v.valor_bruto) : 1;
@@ -135,7 +151,16 @@ export default function VendaDetalhe() {
           Entrega do contrato de café nº {um(v.contrato).numero} ({um(v.contrato).tipo === 'troca' ? 'troca por insumos' : 'venda futura'}) ›
         </Text>
       ) : null}
-      <Dado rotulo={v.tipo === 'animais' ? 'Nº da nota / GTA' : 'Nº da nota / documento'} valor={v.numero_documento} />
+      <Dado rotulo="Nota Fiscal" valor={v.numero_documento ? `nº ${v.numero_documento}${v.documento_serie ? ` série ${v.documento_serie}` : ''}` : null} />
+      {v.tipo === 'animais' ? <Dado rotulo="GTA" valor={v.gta_numero ? `nº ${v.gta_numero}${v.gta_serie ? ` série ${v.gta_serie}` : ''}${v.gta_uf ? `/${v.gta_uf}` : ''}` : null} /> : null}
+      {/* V161: a GTA pode ser informada depois (é obrigatória para o transporte e na NF-e do gado) */}
+      {v.tipo === 'animais' && v.fazenda_id === fazendaAtiva?.id ? (
+        <>
+          <GtaVenda key={v.gta_numero ?? 'sem'} vendaId={v.id} atual={v} aoGravar={(g) => setV({ ...v, ...g })} />
+          {/* V163: ficha pronta para emitir a e-GTA no Siapec e leitura da GTA emitida */}
+          <Botao titulo={v.gta_numero ? 'Abrir a GTA' : 'Preparar a GTA (Siapec)'} tipo="secundario" onPress={() => navegacao.navigate('GtaForm', { vendaId: v.id })} />
+        </>
+      ) : null}
 
       {v.tipo === 'animais' ? (
         <>
@@ -152,9 +177,46 @@ export default function VendaDetalhe() {
           ) : null}
           {v.barriga_tipo ? <Dado rotulo="Peso para a conta" valor={`${formatarNumero(Number(v.peso_liquido_kg), 2)} kg`} /> : null}
           {v.arrobas != null ? <Dado rotulo={`Arrobas (de ${formatarNumero(Number(v.kg_arroba), 2)} kg)`} valor={`${formatarNumero(Number(v.arrobas), 2)} @${cab ? ` · ${formatarNumero(Number(v.arrobas) / cab, 2)} @ por cabeça` : ''}`} /> : null}
-          <Dado rotulo={`Preço por ${textoFormaPreco(v.forma_preco)}`} valor={formatarMoeda(Number(v.preco))} />
+          {v.preco != null ? <Dado rotulo={`Preço por ${textoFormaPreco(v.forma_preco)}`} valor={formatarMoeda(Number(v.preco))} /> : null}
           <Dado rotulo="Valor da venda" valor={`${formatarMoeda(Number(v.valor_bruto))}${cab ? ` · ${formatarMoeda(Number(v.valor_bruto) / cab)} por cabeça` : ''}`} />
           {v.forma_preco !== 'arroba' && Number(v.arrobas) > 0 ? <Dado rotulo="Equivale a" valor={`${formatarMoeda(Number(v.valor_bruto) / Number(v.arrobas))} por @`} /> : null}
+          {v.gado_fica ? <Dado rotulo="O gado ficou na fazenda" valor="no estoque de terceiros do comprador" /> : null}
+          {/* V203: venda com vários itens */}
+          {itens.filter((i) => i.tipo_item === 'animal').length > 1 && (
+            <>
+              <Secao titulo="Itens" />
+              {itens
+                .filter((i) => i.tipo_item === 'animal')
+                .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0))
+                .map((i, k) => {
+                  const nc = Number(i.cabecas) || 0;
+                  return (
+                    <View key={i.id} style={estilos.item}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+                        <Text style={estilos.itemNome}>
+                          Item {k + 1}: {formatarNumero(nc)} cab.{i.sexo ? ` ${i.sexo === 'M' ? 'machos' : 'fêmeas'}` : ''}
+                          {i.idade_de != null ? ` de ${i.idade_ate != null ? `${i.idade_de} a ${i.idade_ate}` : `+${i.idade_de - 1}`} meses` : ''}
+                          {um(i.raca)?.nome ? ` · ${um(i.raca).nome}` : ''}
+                        </Text>
+                        <Text style={estilos.itemValor}>{formatarMoeda(Number(i.valor_total))}</Text>
+                      </View>
+                      <Text style={estilos.nota}>
+                        {[
+                          um(i.lote_item) ? `lote ${codigoLote(um(i.lote_item).numero, sigla)}` : 'do rebanho',
+                          um(i.pesagem_item) ? `pesagem nº ${um(i.pesagem_item).numero}` : null,
+                          Number(i.peso_kg) > 0 ? `${formatarNumero(Number(i.peso_kg), 1)} kg brutos (${formatarNumero(Number(i.peso_kg) / (nc || 1), 1)} kg/cab)` : null,
+                          Number(i.arrobas) > 0 ? `${formatarNumero(Number(i.arrobas), 2)} @ de ${formatarNumero(Number(i.kg_arroba), 2)} kg` : null,
+                          `${formatarMoeda(Number(i.valor_unitario))} por ${textoFormaPreco(i.forma_preco)}`,
+                          nc ? `${formatarMoeda(Number(i.valor_total) / nc)} por cabeça` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Text>
+                    </View>
+                  );
+                })}
+            </>
+          )}
         </>
       ) : (
         <>
@@ -178,6 +240,11 @@ export default function VendaDetalhe() {
               {i.tipo_item === 'insumo' && (
                 <Text style={estilos.nota}>
                   {formatarQtd(i.quantidade)} {i.unidade} × {formatarMoeda(Number(i.valor_unitario))} · saiu do estoque
+                </Text>
+              )}
+              {i.tipo_item === 'insumo' && i.custo_total != null && (
+                <Text style={[estilos.nota, { fontWeight: '700' }]}>
+                  Custo {formatarMoeda(Number(i.custo_total))} ({formatarMoeda(Number(i.custo_unitario))} por {i.unidade}) · margem {formatarMoeda(Number(i.valor_total) - Number(i.custo_total))}
                 </Text>
               )}
             </View>
@@ -222,7 +289,7 @@ export default function VendaDetalhe() {
         {parcelas.map((p) => (
           <Linha
             key={p.id}
-            titulo={`Título nº ${p.numero}${parcelas.length > 1 ? ` · ${p.parcela}ª parcela` : ''}`}
+            titulo={`Título nº ${p.numero}${p.intermediaria ? ` · intermediária ${p.parcela}/${p.total_parcelas}` : parcelas.length > 1 ? ` · ${p.parcela}ª parcela` : ''}`}
             linhas={[
               `Vence ${doBanco(p.data_vencimento)}`,
               p.situacao === 'pago' ? `Recebido em ${doBanco(p.data_pagamento)}` : p.situacao === 'parcial' ? `Recebido em parte: ${formatarMoeda(Number(p.valor_pago))}` : 'Em aberto',
@@ -245,6 +312,31 @@ export default function VendaDetalhe() {
           </Text>
         </>
       )}
+
+      {/* V157: nota fiscal eletrônica da venda */}
+      <Secao titulo="Nota fiscal (NF-e)" />
+      {notas.length ? (
+        <Lista>
+          {notas.map((n) => (
+            <Linha
+              key={n.id}
+              titulo={`NF-e nº ${n.numero} / ${n.serie}${n.ambiente === 2 ? ' (teste)' : ''}`}
+              linhas={[TEXTO_SITUACAO[n.situacao as SituacaoNota] ?? n.situacao]}
+              onPress={() => navegacao.push('NotaFiscalDetalhe', { id: n.id })}
+            />
+          ))}
+        </Lista>
+      ) : null}
+      {/* V160: a nota só sai pela fazenda em que o sistema está aberto */}
+      {/* V204: NF informada na venda e que não saiu por aqui = emitida fora do sistema: não se emite outra */}
+      {v.numero_documento && !notas.some((n) => String(n.numero) === String(v.numero_documento).trim()) ? (
+        <Aviso tipo="info" texto={`NF nº ${v.numero_documento} emitida fora do sistema (informada na venda): não se emite outra NF-e para esta venda.`} />
+      ) : !notas.some((n) => n.situacao === 'autorizada') &&
+        (v.fazenda_id === fazendaAtiva?.id ? (
+          <Botao titulo={notas.length ? 'Emitir a NF-e desta venda' : 'Emitir NF-e'} onPress={() => navegacao.push('NotaFiscalEmitir', { vendaId: v.id })} />
+        ) : (
+          <Aviso tipo="info" texto={`Esta venda é de ${um(v.fazenda)?.nome ?? 'outra fazenda'}. A NF-e só sai pela fazenda em que o sistema está aberto: troque para ela na capa.`} />
+        ))}
 
       <Secao titulo="Outros" />
       <Dado rotulo="Observações" valor={v.observacoes} />

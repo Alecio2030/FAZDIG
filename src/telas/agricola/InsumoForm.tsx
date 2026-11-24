@@ -13,7 +13,6 @@ import UnidadesInsumo from '../../componentes/UnidadesInsumo';
 import DadosUsoVeterinario from '../../componentes/DadosUsoVeterinario';
 import EntradaParcial, { erroParcial, parcialDoCadastro, parcialParaBanco, parcialVazio, type Parcial } from '../../componentes/EntradaParcial';
 import Secao from '../../componentes/Secao';
-import EstoqueInicial from '../../componentes/EstoqueInicial';
 import AtributosProduto, { DEFS, type Atributos } from '../../componentes/AtributosProduto';
 import { formatarMoeda, lerNumero, numeroParaCampo } from '../../lib/formatos';
 import ConsultaInsumos from './ConsultaInsumos';
@@ -31,7 +30,8 @@ const igualNome = (a: string, b: string) => a.trim().toLowerCase() === b.trim().
 
 /**
  * Cadastro de insumos (e de Medicamentos e vacinas).
- * - Digitou o nome de um produto já cadastrado: carrega todos os dados e o estoque; completa ou altera e confirma.
+ * - Digitou o nome de um produto já cadastrado: carrega todos os dados; completa ou altera e confirma.
+ * - V179: o estoque (saldo, custos, estoque inicial) saiu daqui e foi para Mais › Estoque, pedindo a fazenda.
  * - Vacina e medicamento: "Completo" ou "Entrada parcial" (comprado às pressas).
  * - Todo problema aparece em vermelho no próprio campo e, por extenso, junto do botão.
  */
@@ -77,7 +77,7 @@ export default function InsumoForm() {
   const incompleto = !!registro && (registro.cadastro_completo === false || (veterinario && !registro.dose_recomendada));
 
   useLayoutEffect(() => {
-    navegacao.setOptions({ title: veioDaConsulta ? 'Editar insumo' : grupo === 'veterinario' ? 'Medicamentos e vacinas' : 'Insumos' });
+    navegacao.setOptions({ title: veioDaConsulta ? 'Editar insumo' : grupo === 'veterinario' ? 'Medicamentos e vacinas' : 'Cadastro de insumos' });
   }, [navegacao, veioDaConsulta, grupo]);
 
   // ---- carregar um produto (todos os campos + estoque da fazenda ativa) ----
@@ -317,19 +317,8 @@ export default function InsumoForm() {
       {registro && (
         <View style={estilos.quadroProduto}>
           <Text style={estilos.quadroTitulo}>{veioDaConsulta ? registro.nome : `${registro.nome} já está cadastrado`}</Text>
-          <Text style={estilos.quadroEstoque}>
-            Estoque{fazendaAtiva ? ` em ${fazendaAtiva.nome}` : ''}: {saldo === null ? '...' : textoSaldo(saldo, registro)}
-          </Text>
           <Text style={estilos.nota}>{textoUnidades(registro)}</Text>
           {veterinario && <Text style={estilos.nota}>Dose recomendada: {textoDose(registro, registro.unidade) ?? 'NÃO INFORMADA'}</Text>}
-          {custos.medio != null && (
-            <Text style={estilos.nota}>
-              Custo médio {formatarMoeda(custos.medio)} por {registro.unidade} · último {formatarMoeda(custos.ultimo)}
-            </Text>
-          )}
-          {registro.estoque_minimo != null && saldo != null && saldo <= Number(registro.estoque_minimo) && (
-            <Text style={[estilos.nota, { color: cores.erro, fontWeight: '700' }]}>Abaixo do estoque mínimo ({registro.estoque_minimo} {registro.unidade}): repor.</Text>
-          )}
           {!parcial && <Text style={estilos.nota}>{incompleto ? 'Cadastro incompleto: complete o que falta abaixo e confirme o cadastro.' : 'Os dados abaixo vieram do cadastro. Se mudar algo, confirme a alteração.'}</Text>}
         </View>
       )}
@@ -375,7 +364,7 @@ export default function InsumoForm() {
           <Campo rotulo="Fabricante / marca" value={fabricante} onChangeText={setFabricante} autoCapitalize="words" />
           <Campo rotulo="Código de barras / GTIN" value={codigoBarras} onChangeText={(t) => setCodigoBarras(t.replace(/[^\dA-Za-z]/g, ''))} keyboardType="number-pad" />
           {DEFS[categoria[0]] && <AtributosProduto categoria={categoria[0]} valor={atributos} aoMudar={setAtributos} />}
-          <Secao titulo="Estoque" />
+          <Secao titulo="Reposição" />
           <Campo
             rotulo={`Estoque mínimo${un.compra[0] ? ` (${nomeUnidade(un.compra[0])})` : ''} – alerta de reposição`}
             value={minimo}
@@ -385,9 +374,7 @@ export default function InsumoForm() {
             erro={erros.minimo}
           />
           {registro && <Interruptor rotulo="Ativo" descricao="Inativos não aparecem para escolher em novas compras e aplicações." valor={ativo} aoMudar={setAtivo} />}
-          {registro && fazendaAtiva && (
-            <EstoqueInicial insumoId={registro.id} fazendaId={fazendaAtiva.id} fazendaNome={fazendaAtiva.nome} unidade={registro.unidade} aoMudar={() => atualizarSaldo(registro.id)} />
-          )}
+          {registro && <Text style={estilos.nota}>Saldo, custo, entradas, saídas e estoque inicial de cada fazenda: Mais › Estoque.</Text>}
         </>
       )}
 

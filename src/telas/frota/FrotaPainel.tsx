@@ -4,7 +4,6 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Tela from '../../componentes/Tela';
 import Botao from '../../componentes/Botao';
 import Aviso from '../../componentes/Aviso';
-import Escolha from '../../componentes/Escolha';
 import Secao from '../../componentes/Secao';
 import Linha from '../../componentes/Linha';
 import Lista from '../../componentes/Lista';
@@ -25,14 +24,14 @@ export default function FrotaPainel() {
   const navegacao = useNavigation<NavPilha>();
   const { fazendaAtiva, fazendas } = useSessao();
   const fid = fazendaAtiva?.id;
-  const [filtro, setFiltro] = useState<string[]>(['todas']);
   const [veiculos, setVeiculos] = useState<Veiculo[] | null>(null);
   const [leituras, setLeituras] = useState<Record<string, LeituraAtual>>({});
   const [situacao, setSituacao] = useState<Situacao[]>([]);
   const [seguros, setSeguros] = useState<any[]>([]);
   const [gasto, setGasto] = useState<{ comb: number; manut: number }>({ comb: 0, manut: 0 });
   const [erro, setErro] = useState<string | null>(null);
-  const soEsta = filtro[0] === 'esta';
+  // V169: o que é de uma fazenda só aparece nela
+  const soEsta = true;
 
   const carregar = useCallback(async () => {
     try {
@@ -87,16 +86,6 @@ export default function FrotaPainel() {
   return (
     <Tela atualizando={false} aoAtualizar={carregar}>
       {erro && <Aviso tipo="erro" texto={erro} />}
-      {fazendas.length > 1 && (
-        <Escolha
-          opcoes={[
-            { valor: 'todas', rotulo: 'Todas as fazendas' },
-            { valor: 'esta', rotulo: fazendaAtiva?.nome ?? 'Esta fazenda' },
-          ]}
-          valor={filtro}
-          aoMudar={setFiltro}
-        />
-      )}
 
       <View style={estilos.quadros}>
         <View style={[estilos.quadro, vencidas > 0 && { borderColor: cores.erro }]}>

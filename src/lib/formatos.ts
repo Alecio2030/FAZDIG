@@ -60,9 +60,9 @@ export function formatarNumero(valor: number | null | undefined, casas = 0): str
   return `${negativo ? '-' : ''}${comPontos}${decimal ? ',' + decimal : ''}`;
 }
 
-/** 1234.5 -> "R$ 1.234,50" */
+/** 1234.5 -> "1.234,50" (V198: sem o R$ na frente, em todo o sistema) */
 export function formatarMoeda(valor: number | null | undefined): string {
-  return `R$ ${formatarNumero(valor, 2)}`;
+  return formatarNumero(valor, 2);
 }
 
 /**
@@ -102,6 +102,22 @@ export function mascaraTelefone(texto: string): string {
 }
 
 /** 29700-000 */
+/**
+ * V164: Inscrição Estadual de produtor rural no padrão 000.000.00-0 (9 números, como no ES).
+ * Com letras (ex.: ISENTO) fica como está; com mais de 9 números (outros estados), só os números.
+ */
+export function mascaraIE(texto: string): string {
+  const s = String(texto ?? '');
+  if (/[A-Za-z]/.test(s)) return s.toUpperCase().replace(/[^A-Z]/g, '');
+  const d = somenteDigitos(s).slice(0, 14);
+  if (d.length > 9) return d;
+  let r = d.slice(0, 3);
+  if (d.length > 3) r += '.' + d.slice(3, 6);
+  if (d.length > 6) r += '.' + d.slice(6, 8);
+  if (d.length > 8) r += '-' + d.slice(8, 9);
+  return r;
+}
+
 export function mascaraCep(texto: string): string {
   const d = somenteDigitos(texto).slice(0, 8);
   return d.length <= 5 ? d : `${d.slice(0, 5)}-${d.slice(5)}`;

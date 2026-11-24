@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Tela from '../componentes/Tela';
 import ItemMenu from '../componentes/ItemMenu';
+import CentrosDaAba from '../componentes/CentrosDaAba';
 import { MODULOS, abrirFuncao, type ChaveModulo } from '../navegacao/modulos';
 import { useSessao } from '../contexto/SessaoContext';
 import type { NavPilha } from '../navegacao/rotas';
@@ -18,6 +19,8 @@ export default function Modulo({ chave }: { chave: ChaveModulo }) {
   const funcoes = fora ? modulo.funcoes.filter((f) => !fora.includes(f.chave)) : modulo.funcoes;
   return (
     <Tela emAba>
+      {/* V173: soma dos centros de custo (grau 3) da unidade em uso; tocando, abre os lançamentos */}
+      <CentrosDaAba chave={chave} />
       <View style={estilos.lista}>
         {funcoes.map((f, i) => (
           <View key={f.chave} style={i > 0 && estilos.divisor}>
@@ -34,8 +37,8 @@ export default function Modulo({ chave }: { chave: ChaveModulo }) {
   );
 }
 
-export const FORA_ADM = ['vendas'];
-export const FORA_PARTICULAR = ['vendas', 'imobilizado', 'plano', 'tipos', 'transferencias'];
+export const FORA_ADM = ['vendas', 'notas'];
+export const FORA_PARTICULAR = ['vendas', 'notas', 'imobilizado', 'plano', 'tipos', 'transferencias'];
 
 export const estilos = StyleSheet.create({
   lista: { borderRadius: tam.raio, overflow: 'hidden', borderWidth: 1, borderColor: cores.borda },

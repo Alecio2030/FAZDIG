@@ -18,12 +18,13 @@ import { useSessao } from '../../contexto/SessaoContext';
 import { ADM, NOME_ADM, centroDaUnidade, ehParticular, filtrarUnidade, idUnidade, nomeUnidade, opcoesUnidade, valorUnidade } from '../../lib/unidades';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
 import { dataValida, doBanco, hojeBR, paraBanco } from '../../lib/datas';
-import { formatarMoeda, formatarNumero, lerNumero, moedaParaCampo, numeroParaCampo, somenteDigitos } from '../../lib/formatos';
+import { formatarMoeda, formatarNumero, formatarQtd, lerNumero, moedaParaCampo, numeroParaCampo, somenteDigitos } from '../../lib/formatos';
 import { codigoBarras, type LeituraNota } from '../../lib/notaFiscal';
 import { abrirFotoDocumento, fornecedorPeloDocumento } from '../../lib/documentos';
 import { listaTiposDespesa, tiposLancamento } from '../../lib/classificacao';
 import { perguntar } from '../../lib/perguntar';
 import { somarDias } from '../../lib/reproducao';
+import { aprenderRateio, linhasDoPadrao, mesmoRateio, rateioPadrao, type ItemRateio } from '../../lib/rateioPadrao';
 import type { NavPilha } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -41,6 +42,8 @@ type Props = {
   /** avisa a tela de Compras que a despesa aberta foi fechada (gravada, excluída ou abandonada) */
   /** motivo (V149): 'gravou' ou 'excluiu', para quem abriu pela Consulta saber para onde voltar */
   aoFechar?: (motivo?: 'gravou' | 'excluiu' | 'saiu') => void;
+  /** V172: nota com vários produtos vai para Compras › Produtos (estoque item por item); ausente = não há estoque aqui (Administrativo/Particular) */
+  paraProdutos?: (d: LeituraNota, arquivo: string | null) => void;
 };
 
 /**
@@ -48,7 +51,7 @@ type Props = {
  * Vai direto para a despesa e para o contas a pagar; se já foi paga, sai na hora do caixa ou do banco.
  * Ninguém escolhe conta do plano: escolhe o tipo da despesa, e a conta vem dos bastidores.
  */
-export default function DespesaForm({ abrirId, aoFechar }: Props) {
+export default function DespesaForm({ abrirId, aoFechar, paraProdutos }: Props) {
   const navegacao = useNavigation<NavPilha>();
   const { fazendaAtiva, fazendas, modoAdm } = useSessao();
   const fid = fazendaAtiva?.id;
@@ -67,6 +70,15 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
   const [documento, setDocumento] = useState('');
   const [valor, setValor] = useState('');
   const [rateio, setRateio] = useState<Rateio[]>([]);
+  // V174: rateio que veio do padrão guardado (some se a pessoa mexer; troca sozinho com o tipo da despesa)
+  const [rateioAuto, setRateioAuto] = useState(false);
+  const [padrao, setPadrao] = useState<{ origem: 'tipo' | 'geral' | null; rateio: ItemRateio[] }>({ origem: null, rateio: [] });
+  const [guardarPadrao, setGuardarPadrao] = useState<string[]>([]);
+  /** a pessoa mexeu no rateio: deixa de ser o padrão */
+  const mexerRateio = (f: (l: Rateio[]) => Rateio[]) => {
+    setRateioAuto(false);
+    setRateio(f);
+  };
   const [pagto, setPagto] = useState<string[]>(['pago']);
   const [bancoId, setBancoId] = useState<string | null>(null);
   const [nParc, setNParc] = useState('1');
@@ -129,11 +141,33 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
     return d.map((c) => ({ id: c.id, titulo: c.nome, detalhe: c.banco }));
   }, []);
 
+  // ---- V174: rateio padrão da unidade (do tipo da despesa ou o geral) ----
+  useEffect(() => {
+    if (id || carregando || particular) return;
+    if (rateio.length && !rateioAuto) return;
+    let vivo = true;
+    rateioPadrao(idUnidade(unidade), tipoDesp).then((r) => {
+      if (!vivo) return;
+      setPadrao(r);
+      if (r.rateio.length) {
+        setRateio(linhasDoPadrao(r.rateio, chave));
+        setRateioAuto(true);
+      } else if (rateioAuto) {
+        setRateio([]);
+        setRateioAuto(false);
+      }
+    });
+    return () => {
+      vivo = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unidade, tipoDesp, id, carregando, particular]);
+
   // ---- memória por fornecedor: a última despesa dele sugere o tipo, o centro de custo e o pagamento ----
   const semMemoria = useRef(false); // despesa aberta para alterar: não sugere por cima do que está gravado
   /** "como está a tela": por padrão o que a pessoa já preencheu; depois da foto, o que a leitura trouxe */
   async function escolherFornecedor(pid: string | null, tela?: { tipo: string | null; descricao: string; temRateio: boolean; banco: string | null; pagtoDefinido: boolean }) {
-    const t0 = tela ?? { tipo: tipoDesp, descricao, temRateio: rateio.length > 0, banco: bancoId, pagtoDefinido: parcelas.length > 0 };
+    const t0 = tela ?? { tipo: tipoDesp, descricao, temRateio: rateio.length > 0 && !rateioAuto, banco: bancoId, pagtoDefinido: parcelas.length > 0 };
     setPessoaId(pid);
     setSugestao(null);
     if (!pid || !fid || id || semMemoria.current) return;
@@ -161,6 +195,7 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
       if (!t0.descricao.trim() && descAnt && descAnt !== nomeTipo) setDescricao(descAnt);
       if (!t0.temRateio && (u.rateio as any[])?.length) {
         setRateio((u.rateio as any[]).map((x) => ({ chave: chave(), centroId: x.centro_custo_id, perc: numeroParaCampo(x.percentual) })));
+        setRateioAuto(false);
         usou.push('centro de custo');
       }
       if (!t0.banco && u.conta_bancaria_id) {
@@ -194,9 +229,22 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
       const seguir = await perguntar('Conhecimento de transporte', 'Frete de mercadoria comprada é lançado em Produtos (ele entra no custo do produto). Lançar aqui só como despesa?', 'Lançar como despesa', 'Voltar');
       if (!seguir) return;
     }
+    const itens = d.itens ?? [];
+    // V172: nota com produtos não se junta numa linha: cada produto entra no estoque separado
+    const comProdutos = d.tipo_documento !== 'conta_consumo' && d.tipo_documento !== 'cte' && itens.length >= 2;
+    if (comProdutos && paraProdutos) {
+      const irProdutos = await perguntar(
+        `Nota com ${itens.length} produtos`,
+        `Produtos entram no estoque um a um (quantidade, unidade, valor unitário e desconto de cada item). Lançar em Produtos? Use "Despesa mesmo" só para serviço ou gasto que não vai para o estoque.`,
+        'Lançar em Produtos',
+        'Despesa mesmo',
+      );
+      if (irProdutos) return paraProdutos(d, arq);
+    } else if (comProdutos) {
+      atencao.push(`a nota tem ${itens.length} produtos: se forem para o estoque, lance dentro da fazenda (página de rosto › caixinha da fazenda › Compras › Produtos), um item por produto`);
+    }
     const forn = await fornecedorPeloDocumento(d.emitente?.nome, d.emitente?.cnpj_cpf);
     if (forn.aviso) atencao.push(forn.aviso);
-    const itens = d.itens ?? [];
     const descr = d.tipo_documento === 'conta_consumo' ? '' : itens.length === 1 ? itens[0].descricao : itens.length > 1 ? `${itens[0].descricao} e outros` : '';
     const dups = (d.duplicatas ?? []).filter((x) => x && /^\d{4}-\d{2}-\d{2}$/.test(x.vencimento)).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
     const somaDup = dups.reduce((t, x) => t + (Number(x.valor) || 0), 0);
@@ -229,6 +277,14 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
     }
     setLinha(cb ? somenteDigitos(d.codigo_barras ?? '') : '');
     setArquivo(arq);
+    // V172: na despesa com vários itens, a relação de cada um fica nas observações
+    if (itens.length >= 2 && d.tipo_documento !== 'conta_consumo')
+      setObs(
+        'Itens da nota:\n' +
+          itens
+            .map((x) => `• ${x.descricao}${x.quantidade != null ? ` – ${formatarQtd(x.quantidade)} ${x.unidade ?? ''}` : ''}${x.valor_total != null ? ` – ${formatarMoeda(r2(x.valor_total - (x.desconto ?? 0)))}` : ''}`)
+            .join('\n'),
+      );
     // o fornecedor por último: a memória dele sugere o tipo de despesa e o centro de custo
     await escolherFornecedor(forn.id, { tipo: null, descricao: descr, temRateio: false, banco: null, pagtoDefinido: true });
 
@@ -324,6 +380,8 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
     setDocumento('');
     setValor('');
     setRateio([]);
+    setRateioAuto(false);
+    setGuardarPadrao([]);
     setPagto(['pago']);
     setBancoId(null);
     setNParc('1');
@@ -351,6 +409,8 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
     if (!tipoDesp) e.tipo = 'Escolha o que é esta despesa.';
     if (total <= 0) e.valor = 'Informe o valor.';
     if (particular && !rateio.length) e.rateio = 'Diga de qual sócio é esta despesa (toque em "+ De qual sócio").';
+    // V174: na fazenda toda despesa vai a um centro de custo (talhão, lote, Agrícola, Pecuária ou Despesas Operacionais)
+    if (!particular && unidade !== ADM && !rateio.length) e.rateio = 'Diga em qual centro de custo vai esta despesa (toque em "+ Talhão, lote ou outro centro de custo"). Se for de vários, divida em %: na primeira vez o rateio fica guardado como padrão.';
     if (rateio.length) {
       if (rateio.some((x) => !x.centroId)) e.rateio = particular ? 'Escolha o sócio de cada linha.' : 'Escolha o centro de custo de cada linha.';
       else if (new Set(rateio.map((x) => x.centroId)).size !== rateio.length) e.rateio = 'Há centro de custo repetido.';
@@ -415,7 +475,8 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
       : res.parcelas > 1
         ? `${res.parcelas} parcelas lançadas no contas a pagar.`
         : `Lançada no contas a pagar, vence ${primeiro}.`;
-    setAviso(`Despesa gravada na compra nº ${res.numero}: ${formatarMoeda(res.total)}. ${destino}`);
+    const aprendeu = particular ? null : await aprenderRateio(idUnidade(unidade), tipoDesp, p.rateio as unknown as ItemRateio[], guardarPadrao.length > 0);
+    setAviso(`Despesa gravada na compra nº ${res.numero}: ${formatarMoeda(res.total)}. ${destino}${aprendeu ? ` ${aprendeu}` : ''}`);
     limpar();
     aoFechar?.('gravou');
     recarregarTopo();
@@ -513,32 +574,41 @@ export default function DespesaForm({ abrirId, aoFechar }: Props) {
         opcoes={opcoesUnidade(fazendas)}
         valor={[unidade]}
         aoMudar={(v) => {
-          if (v[0] !== unidade) setRateio([]);
+          if (v[0] !== unidade) {
+            setRateio([]);
+            setRateioAuto(false);
+          }
           setUnidade(v[0]);
         }}
       />
-      {rateio.length === 0 && !particular && <Text style={estilos.nota}>Sem escolher nada, fica como despesa geral {unidade === ADM ? `do ${NOME_ADM}` : `da ${nomeUnidade(idUnidade(unidade), fazendas)}`}. Para apontar um talhão, um lote ou dividir entre vários, adicione o centro de custo.</Text>}
+      {rateio.length === 0 && !particular && unidade === ADM && <Text style={estilos.nota}>Sem escolher nada, fica como despesa geral do {NOME_ADM}. Para dividir entre centros, adicione o centro de custo.</Text>}
+      {rateio.length === 0 && !particular && unidade !== ADM && <Text style={estilos.nota}>Diga em qual centro de custo de {nomeUnidade(idUnidade(unidade), fazendas)} vai esta despesa: um talhão, um lote, o Agrícola, a Pecuária ou as Despesas Operacionais. Se for de vários, divida em %. Na primeira vez o rateio fica guardado como padrão.</Text>}
+      {rateioAuto && padrao.origem && <Text style={estilos.nota}>Rateio padrão {padrao.origem === 'tipo' ? 'deste tipo de despesa' : 'geral'} de {unidade === ADM ? NOME_ADM : nomeUnidade(idUnidade(unidade), fazendas)} (Financeiro › Parâmetros). Mude se esta for diferente.</Text>}
       {particular && <Text style={estilos.nota}>Despesa particular: não entra no resultado das fazendas; vai ao Patrimônio Líquido como despesa do sócio. Diga de qual sócio é (ou divida entre eles).</Text>}
       {rateio.map((x) => (
         <View key={x.chave} style={estilos.linha}>
           <View style={{ flex: 1 }}>
-            <SeletorLista rotulo={particular ? 'Sócio' : 'Centro de custo'} valorId={x.centroId} aoMudar={(v) => setRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, centroId: v } : y)))} carregar={carregarCentros} vazio={particular ? 'Nenhum sócio cadastrado neste Particular. Cadastre em Mais › Fazendas › Consultar › toque no Particular.' : 'Nenhum centro de custo. Cadastre em Financeiro › Centros de custo.'} />
+            <SeletorLista rotulo={particular ? 'Sócio' : 'Centro de custo'} valorId={x.centroId} aoMudar={(v) => mexerRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, centroId: v } : y)))} carregar={carregarCentros} vazio={particular ? 'Nenhum sócio cadastrado neste Particular. Cadastre em Mais › Fazendas › Consultar › toque no Particular.' : 'Nenhum centro de custo. Cadastre em Financeiro › Centros de custo.'} />
           </View>
           <View style={{ width: 80 }}>
-            <Campo rotulo="%" value={x.perc} onChangeText={(t) => setRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, perc: t } : y)))} keyboardType="decimal-pad" />
+            <Campo rotulo="%" value={x.perc} onChangeText={(t) => mexerRateio((l) => l.map((y) => (y.chave === x.chave ? { ...y, perc: t } : y)))} keyboardType="decimal-pad" />
           </View>
-          <Pressable onPress={() => setRateio((l) => l.filter((y) => y.chave !== x.chave))} hitSlop={8} style={{ paddingTop: 26 }} accessibilityLabel="Tirar centro">
+          <Pressable onPress={() => mexerRateio((l) => l.filter((y) => y.chave !== x.chave))} hitSlop={8} style={{ paddingTop: 26 }} accessibilityLabel="Tirar centro">
             <Ionicons name="close-circle" size={24} color={cores.textoSuave} />
           </Pressable>
         </View>
       ))}
       <View style={estilos.linhaEntre}>
-        <Text style={estilos.link} onPress={() => setRateio((l) => [...l, { chave: chave(), centroId: null, perc: numeroParaCampo(r2(Math.max(0, 100 - somaRateio))) }])}>
+        <Text style={estilos.link} onPress={() => mexerRateio((l) => [...l, { chave: chave(), centroId: null, perc: numeroParaCampo(r2(Math.max(0, 100 - somaRateio))) }])}>
           + {particular ? (rateio.length ? 'Dividir com outro sócio' : 'De qual sócio') : rateio.length ? 'Dividir com outro centro de custo' : 'Talhão, lote ou outro centro de custo'}
         </Text>
         {rateio.length > 1 && <Text style={[estilos.soma, Math.abs(somaRateio - 100) > 0.001 && { color: cores.erro }]}>Soma {formatarNumero(somaRateio, 2)}%</Text>}
       </View>
       {erros.rateio && <Text style={estilos.erro}>{erros.rateio}</Text>}
+      {!particular && !rateioAuto && tipoDesp && padrao.origem === 'tipo' && rateio.length > 0 && rateio.every((x) => x.centroId) &&
+        !mesmoRateio(padrao.rateio, rateio.map((x) => ({ centro_custo_id: x.centroId!, percentual: n(x.perc) ?? 0 }))) && (
+          <Escolha opcoes={[{ valor: 'sim', rotulo: 'Guardar este rateio como o novo padrão deste tipo de despesa' }]} valor={guardarPadrao} aoMudar={setGuardarPadrao} multiplo />
+        )}
 
       {/* ---------- pagamento ---------- */}
       <Secao titulo="Pagamento" />

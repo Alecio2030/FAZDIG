@@ -18,6 +18,7 @@ import { formatarMoeda, lerNumero, moedaParaCampo, numeroParaCampo } from '../..
 import { limparBusca } from '../../lib/useBusca';
 import { perguntar } from '../../lib/perguntar';
 import { ROTULO_TIPO_ALIMENTO, TIPOS_ALIMENTO, textoComposicao } from '../../lib/dietas';
+import { conferirAlimento } from '../../lib/formulacao';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -42,6 +43,8 @@ export default function AlimentoForm() {
   const [fdn, setFdn] = useState('');
   const [preco, setPreco] = useState('');
   const [ativo, setAtivo] = useState<string[]>(['sim']);
+  // V175: produto do estoque que este alimento é (o trato baixa o estoque dele)
+  const [insumoId, setInsumoId] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -59,8 +62,14 @@ export default function AlimentoForm() {
     setFonte(['tabela']);
     setMs(''); setPb(''); setNdt(''); setFdn(''); setPreco('');
     setAtivo(['sim']);
+    setInsumoId(null);
     setErros({});
   }
+
+  const carregarInsumos = useCallback(async (): Promise<ItemLista[]> => {
+    const d = await consulta<any[]>(supabase.from('insumos').select('id, nome, categoria, unidade, conteudo_qtd, conteudo_medida').eq('ativo', true).order('nome'));
+    return d.map((i) => ({ id: i.id, titulo: i.nome, detalhe: `${i.categoria ?? ''} · ${i.unidade ?? ''}${i.conteudo_qtd ? ` de ${numeroParaCampo(i.conteudo_qtd)} ${i.conteudo_medida ?? ''}` : ''}` }));
+  }, []);
 
   async function escolherParaAlterar(aid: string | null) {
     setAviso(null);
@@ -75,6 +84,7 @@ export default function AlimentoForm() {
     setMs(numeroParaCampo(a.ms)); setPb(numeroParaCampo(a.pb)); setNdt(numeroParaCampo(a.ndt)); setFdn(numeroParaCampo(a.fdn));
     setPreco(moedaParaCampo(a.preco_kg_mn));
     setAtivo([a.ativo ? 'sim' : 'nao']);
+    setInsumoId(a.insumo_id ?? null);
   }
 
   async function salvar() {
@@ -90,7 +100,10 @@ export default function AlimentoForm() {
     if (preco.trim() && (v.preco == null || v.preco < 0)) e.preco = 'Valor inválido.';
     setErros(e);
     if (Object.keys(e).length) return setErro('Confira os campos marcados em vermelho.');
-    const registro = { nome: nome.trim(), tipo: tipo[0], fonte: fonte[0], ms: v.ms, pb: v.pb, ndt: v.ndt, fdn: v.fdn, preco_kg_mn: v.preco, ativo: ativo[0] === 'sim' };
+    // V175: valores fora do usual para o tipo pedem confirmação (um cadastro errado estraga a formulação)
+    const suspeito = conferirAlimento({ nome: nome.trim(), tipo: tipo[0], ms: v.ms!, pb: v.pb!, ndt: v.ndt!, fdn: v.fdn! });
+    if (suspeito && !(await perguntar('Confira os valores', `${suspeito}. Esses valores estão fora do usual e a formulação da dieta vai usá-los assim. Gravar mesmo assim?`, 'Gravar mesmo assim', 'Corrigir'))) return;
+    const registro = { nome: nome.trim(), tipo: tipo[0], fonte: fonte[0], ms: v.ms, pb: v.pb, ndt: v.ndt, fdn: v.fdn, preco_kg_mn: v.preco, ativo: ativo[0] === 'sim', insumo_id: insumoId };
     setSalvando(true);
     const { error } = editId ? await supabase.from('alimentos').update(registro).eq('id', editId) : await supabase.from('alimentos').insert(registro);
     setSalvando(false);
@@ -147,8 +160,15 @@ export default function AlimentoForm() {
         <View style={{ flex: 1 }}><Campo rotulo="FDN % *" value={fdn} onChangeText={setFdn} keyboardType="decimal-pad" erro={erros.fdn} /></View>
       </View>
 
+      <Secao titulo="Estoque" />
+      <SeletorLista rotulo="Produto do estoque" valorId={insumoId} aoMudar={setInsumoId} carregar={carregarInsumos} permitirLimpar dicaBusca="Nome do produto" vazio="Nenhum produto no estoque." />
+      <Text style={estilos.nota}>
+        Ligado a um produto do estoque, o trato do lote baixa o estoque dele sozinho e o custo vem do custo médio de lá. O produto precisa estar em kg (ou ter o conteúdo da embalagem em kg).
+      </Text>
+
       <Secao titulo="Preço" />
       <CampoMoeda rotulo="R$ por kg (como vai no cocho)" valor={preco} aoMudar={setPreco} erro={erros.preco} />
+      {insumoId && <Text style={estilos.nota}>Na dieta vale o custo médio do estoque; este preço só é usado enquanto o produto não tiver entrada com valor.</Text>}
 
       {editId && <Escolha rotulo="Situação" opcoes={[{ valor: 'sim', rotulo: 'Ativo' }, { valor: 'nao', rotulo: 'Inativo' }]} valor={ativo} aoMudar={setAtivo} />}
 

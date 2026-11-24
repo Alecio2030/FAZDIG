@@ -87,7 +87,7 @@ export default function ManutencaoForm() {
 
   const recarregar = useCallback(async () => {
     try {
-      const [vs, ls, si] = await Promise.all([carregarVeiculos(fid, true), lerLeiturasAtuais(), lerSituacao(null)]);
+      const [vs, ls, si] = await Promise.all([carregarVeiculos(fid, true), lerLeiturasAtuais(), lerSituacao(fid)]);
       setVeiculos(vs);
       setLeituras(ls);
       setSituacao(si);

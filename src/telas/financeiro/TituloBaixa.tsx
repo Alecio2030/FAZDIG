@@ -17,7 +17,7 @@ import { dataValida, doBanco, hojeBanco, hojeBR, paraBanco } from '../../lib/dat
 import { formatarMoeda, lerNumero, moedaParaCampo } from '../../lib/formatos';
 import { codigoBarras } from '../../lib/notaFiscal';
 import { abrirFotoDocumento } from '../../lib/documentos';
-import { ROTULO_BAIXA, encargosAtraso, r2, saldoTitulo, textoPrazo, textosTitulo, um } from '../../lib/titulos';
+import { ROTULO_BAIXA, encargosAtraso, r2, saldoTitulo, textoParcela, textoPrazo, textosTitulo, um } from '../../lib/titulos';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -230,7 +230,7 @@ export default function TituloBaixa() {
       <View style={estilos.cartao}>
         <Text style={estilos.descricao}>{t.descricao ?? 'Título'}</Text>
         <Text style={estilos.nota}>
-          {[um(t.pessoa)?.nome, t.documento ? `Doc. ${t.documento}` : null, t.total_parcelas > 1 ? `parcela ${t.parcela}/${t.total_parcelas}` : null, um(t.compra) ? `compra nº ${um(t.compra).numero}` : null, um(t.venda) ? `venda nº ${um(t.venda).numero}` : null].filter(Boolean).join(' · ')}
+          {[um(t.pessoa)?.nome, t.documento ? `Doc. ${t.documento}` : null, textoParcela(t) || null, um(t.compra) ? `compra nº ${um(t.compra).numero}` : null, um(t.venda) ? `venda nº ${um(t.venda).numero}` : null].filter(Boolean).join(' · ')}
         </Text>
         <View style={estilos.entre}>
           <View>

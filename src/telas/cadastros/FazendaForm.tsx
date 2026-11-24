@@ -3,6 +3,9 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import Tela from '../../componentes/Tela';
 import Campo from '../../componentes/Campo';
+import CampoCep from '../../componentes/CampoCep';
+import { conferirEndereco } from '../../lib/cep';
+import { mascaraEstabelecimento } from '../../lib/gta';
 import Botao from '../../componentes/Botao';
 import Aviso from '../../componentes/Aviso';
 import Secao from '../../componentes/Secao';
@@ -12,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AbasCadastro, { type Aba } from '../../componentes/AbasCadastro';
 import { useSessao } from '../../contexto/SessaoContext';
 import { supabase, traduzirErro } from '../../lib/supabase';
-import { cpfCnpjValido, formatarNumero, lerNumero, mascaraCep, mascaraCpfCnpj, numeroParaCampo } from '../../lib/formatos';
+import { cpfCnpjValido, formatarNumero, lerNumero, mascaraCep, mascaraCpfCnpj, mascaraIE, numeroParaCampo } from '../../lib/formatos';
 import { lembrarSigla, sugerirSigla } from '../../lib/useSigla';
 import ConsultaFazendas from './ConsultaFazendas';
 import SeletorLista from '../../componentes/SeletorLista';
@@ -113,13 +116,13 @@ export default function FazendaForm() {
           sigla: data.sigla ?? '',
           razao: data.razao_social ?? '',
           doc: data.cpf_cnpj ?? '',
-          ie: data.inscricao_estadual ?? '',
-          defesa: data.inscricao_defesa ?? '',
+          ie: mascaraIE(data.inscricao_estadual ?? ''),
+          defesa: mascaraEstabelecimento(data.inscricao_defesa ?? ''),
           incra: data.incra ?? '',
           itr: data.itr ?? '',
           car: data.car ?? '',
           areaHa: numeroParaCampo(data.area_total_ha),
-          cep: data.cep ?? '',
+          cep: mascaraCep(data.cep ?? ''),
           logradouro: data.logradouro ?? '',
           numero: data.numero ?? '',
           complemento: data.complemento ?? '',
@@ -176,6 +179,8 @@ export default function FazendaForm() {
     if (f.sigla && !/^[A-Z]{2}$/.test(f.sigla)) e.sigla = 'Use 2 letras, ex.: FC.';
     if (f.areaHa.trim() && (ha === null || ha < 0)) e.areaHa = 'Número inválido. Use vírgula para decimais, ex.: 120,5';
     if (f.uf && f.uf.length !== 2) e.uf = '2 letras';
+    // V162: a fazenda precisa de CEP, cidade e UF (a NF-e e a GTA exigem)
+    if (!particular) Object.assign(e, conferirEndereco(f));
     if (f.doc.trim() && !cpfCnpjValido(f.doc)) e.doc = 'CPF ou CNPJ inválido. Confira os números.';
     if (f.razao.trim() && !f.doc.trim()) e.doc = 'Informe o CPF/CNPJ deste nome.';
     setErros(e);
@@ -349,8 +354,8 @@ export default function FazendaForm() {
       <Text style={{ fontSize: 13, color: '#56625A', lineHeight: 19 }}>Em nome de quem saem as notas de compra e de venda desta fazenda. Só muda o faturamento: a movimentação continua toda de um dono só, com várias fazendas. Em branco, valem os dados do produtor.</Text>
       <Campo rotulo="Nome / razão social" value={f.razao} onChangeText={(t) => muda('razao', t)} autoCapitalize="words" />
       <Campo rotulo="CPF ou CNPJ" value={f.doc} onChangeText={(t) => muda('doc', mascaraCpfCnpj(t))} keyboardType="number-pad" maxLength={18} erro={erros.doc} />
-      <Campo rotulo="Inscrição estadual de produtor" value={f.ie} onChangeText={(t) => muda('ie', t)} keyboardType="numbers-and-punctuation" />
-      <Campo rotulo="Inscrição no órgão de defesa animal/sanitária" value={f.defesa} onChangeText={(t) => muda('defesa', t)} autoCapitalize="characters" autoCorrect={false} ajuda="O cadastro da propriedade no órgão estadual (no ES, o IDAF). É o que sai na GTA." />
+      <Campo rotulo="Inscrição estadual de produtor" value={f.ie} onChangeText={(t) => muda('ie', mascaraIE(t))} keyboardType="numbers-and-punctuation" placeholder="000.000.00-0" />
+      <Campo rotulo="Código do Estabelecimento (IDAF)" value={f.defesa} onChangeText={(t) => muda('defesa', mascaraEstabelecimento(t))} keyboardType="number-pad" placeholder="00 000 000 000" ajuda="O cadastro da propriedade no órgão de defesa animal (no ES, o IDAF). É o que sai na GTA." />
       <Campo rotulo="INCRA nº" value={f.incra} onChangeText={(t) => muda('incra', t)} keyboardType="numbers-and-punctuation" ajuda="Código do imóvel rural no INCRA (o do CCIR)." />
       <Campo rotulo="ITR nº" value={f.itr} onChangeText={(t) => muda('itr', t)} keyboardType="numbers-and-punctuation" ajuda="Número do imóvel na Receita Federal (NIRF/CIB)." />
       <Campo rotulo="CAR nº" value={f.car} onChangeText={(t) => muda('car', t)} autoCapitalize="characters" autoCorrect={false} ajuda="Registro no Cadastro Ambiental Rural (começa pela UF, ex.: ES-...)." />
@@ -370,7 +375,17 @@ export default function FazendaForm() {
       )}
 
       <Secao titulo="Endereço" />
-      <Campo rotulo="CEP" value={f.cep} onChangeText={(t) => muda('cep', mascaraCep(t))} keyboardType="number-pad" maxLength={9} />
+      <CampoCep
+        rotulo={particular ? 'CEP' : 'CEP *'}
+        valor={f.cep}
+        aoMudar={(t) => muda('cep', t)}
+        aoAchar={(e) =>
+          setF((a) => ({ ...a, municipio: e.municipio, uf: e.uf, logradouro: e.logradouro || a.logradouro, bairro: e.bairro || a.bairro }))
+        }
+        erro={erros.cep}
+        ufAtual={f.uf}
+        cidadeAtual={f.municipio}
+      />
       <Campo rotulo="Estrada, rodovia ou córrego" value={f.logradouro} onChangeText={(t) => muda('logradouro', t)} autoCapitalize="words" />
       <View style={estilos.linha}>
         <View style={{ width: 110 }}>
@@ -383,11 +398,11 @@ export default function FazendaForm() {
       <Campo rotulo="Distrito ou localidade" value={f.bairro} onChangeText={(t) => muda('bairro', t)} autoCapitalize="words" />
       <View style={estilos.linha}>
         <View style={{ flex: 1 }}>
-          <Campo rotulo="Município" value={f.municipio} onChangeText={(t) => muda('municipio', t)} autoCapitalize="words" />
+          <Campo rotulo={particular ? 'Cidade' : 'Cidade *'} value={f.municipio} onChangeText={(t) => muda('municipio', t)} autoCapitalize="words" erro={erros.municipio} />
         </View>
         <View style={{ width: 84 }}>
           <Campo
-            rotulo="UF"
+            rotulo={particular ? 'UF' : 'UF *'}
             value={f.uf}
             onChangeText={(t) => muda('uf', t.replace(/[^A-Za-z]/g, '').toUpperCase())}
             autoCapitalize="characters"

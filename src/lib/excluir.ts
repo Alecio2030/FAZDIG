@@ -13,6 +13,8 @@ import { perguntar } from './perguntar';
  */
 export type CampoOrigem =
   | 'id'
+  /** V171: todas as parcelas do mesmo lançamento no contas a pagar/receber */
+  | 'grupo'
   | 'compra_id'
   | 'venda_id'
   | 'financiamento_id'

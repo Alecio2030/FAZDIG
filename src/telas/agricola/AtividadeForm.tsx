@@ -39,6 +39,8 @@ import { cores, tam } from '../../tema';
 /** plantasTotal (V150): plantas EFETIVAMENTE plantadas no talhão (cadastro do talhão), nunca as calculadas pelo espaçamento */
 type Local = { id: string; nome: string; tipo: 'talhao' | 'manga'; util: number | null; plantasTotal: number | null; cultura: string | null };
 type Sel = { areaId: string; ha: string };
+/** V198: outros dias/horários da mesma atividade (o 1º é a Data + Início/Fim de cima) */
+type Periodo = { chave: string; data: string; inicio: string; fim: string };
 type Prod = { chave: string; insumoId: string | null; dose: string; unidade: string; por: string; baixar: boolean };
 /** horas: quanto a pessoa trabalhou (vem da duração até ser mudada à mão); custoHora: do cadastro da pessoa (null se não tiver) */
 type Operador = { id: string; nome: string; horas: string; custoHora: number | null; editado: boolean };
@@ -78,6 +80,7 @@ export default function AtividadeForm() {
   const [bombaL, setBombaL] = useState('20');
   const [inicio, setInicio] = useState('');
   const [fim, setFim] = useState('');
+  const [extras, setExtras] = useState<Periodo[]>([]);
   const [maquinaId, setMaquinaId] = useState<string | null>(null);
   const [implementoId, setImplementoId] = useState<string | null>(null);
   const [horasMaq, setHorasMaq] = useState('');
@@ -180,7 +183,11 @@ export default function AtividadeForm() {
   const semPlantas = escolhidos.filter((l) => !l.plantas);
   const semHa = escolhidos.filter((l) => !l.ha);
   const temPlantas = escolhidos.length > 0 && semPlantas.length === 0;
-  const duracao = duracaoHoras(inicio, fim);
+  // V198: horas somadas de todos os dias/horários; dias = datas diferentes
+  const durExtras = extras.map((x) => duracaoHoras(x.inicio, x.fim));
+  const dur1 = duracaoHoras(inicio, fim);
+  const duracao = dur1 == null && durExtras.every((d) => d == null) ? null : Math.round(((dur1 ?? 0) + durExtras.reduce<number>((t, d) => t + (d ?? 0), 0)) * 100) / 100;
+  const qtdDias = new Set([data, ...extras.map((x) => x.data)].filter((d) => dataValida(d))).size || 1;
   const usaProduto = !!tipo && aceitaProduto(tipo, sub);
   const usaBomba = usaProduto && prods.some((p) => p.insumoId && p.por === 'bomba');
   const caldaTotal = usaBomba && n(bombas) && n(bombaL) ? n(bombas)! * n(bombaL)! : null;
@@ -326,6 +333,7 @@ export default function AtividadeForm() {
     setBombas('');
     setInicio('');
     setFim('');
+    setExtras([]);
     setMaquinaId(null);
     setImplementoId(null);
     setHorasMaq('');
@@ -367,6 +375,9 @@ export default function AtividadeForm() {
       setBombaL(a.bomba_litros != null ? numeroParaCampo(a.bomba_litros) : '20');
       setInicio(horaDoBanco(a.hora_inicio));
       setFim(horaDoBanco(a.hora_fim));
+      setExtras(
+        (Array.isArray(a.periodos) ? a.periodos : []).slice(1).map((x: any) => ({ chave: chave(), data: doBanco(x.data), inicio: x.inicio ?? '', fim: x.fim ?? '' })),
+      );
       setMaquinaId(a.maquina_id);
       setImplementoId(a.implemento_id);
       setHorasMaq(numeroParaCampo(a.horas_maquina));
@@ -519,6 +530,7 @@ export default function AtividadeForm() {
     setProds(novos);
     setInicio(hora(d.hora_inicio));
     setFim(hora(d.hora_fim));
+    setExtras([]);
     setMaquinaId(maq?.id ?? null);
     setImplementoId(imp?.id ?? null);
     if (horas) {
@@ -566,8 +578,13 @@ export default function AtividadeForm() {
     });
     if (inicio && !horaValida(inicio)) e.inicio = 'Hora inválida.';
     if (fim && !horaValida(fim)) e.fim = 'Hora inválida.';
+    extras.forEach((x, k) => {
+      if (!dataValida(x.data)) e[`per${x.chave}`] = `${k + 2}º dia: data inválida (dd/mm/aaaa).`;
+      else if (!horaValida(x.inicio) || !horaValida(x.fim)) e[`per${x.chave}`] = `${k + 2}º dia: informe o início e o fim (hh:mm).`;
+    });
+    if (extras.length && (!horaValida(inicio) || !horaValida(fim))) e.inicio = '1º dia: informe o início e o fim (hh:mm).';
     if (horasMaq.trim() && (n(horasMaq) == null || n(horasMaq)! < 0)) e.horas = 'Horas inválidas.';
-    for (const o of operadores) if (o.horas.trim() && (n(o.horas) == null || n(o.horas)! < 0 || n(o.horas)! > 24)) e.operadores = `Horas de ${o.nome} inválidas.`;
+    for (const o of operadores) if (o.horas.trim() && (n(o.horas) == null || n(o.horas)! < 0 || n(o.horas)! > 24 * qtdDias)) e.operadores = `Horas de ${o.nome} inválidas.`;
     if (lamina.trim() && (n(lamina) == null || n(lamina)! < 0)) e.lamina = 'Lâmina inválida.';
     setErros(e);
     const lista = Object.values(e);
@@ -583,7 +600,7 @@ export default function AtividadeForm() {
       alvo: ['pulverizacao', 'capina'].includes(tipo) ? alvo.trim() : '',
       lamina_mm: tipo === 'irrigacao' && lamina.trim() ? n(lamina) : null,
       hora_inicio: horaValida(inicio) ? inicio : '',
-      hora_fim: horaValida(fim) ? fim : '',
+      hora_fim: extras.length && horaValida(extras[extras.length - 1].fim) ? extras[extras.length - 1].fim : horaValida(fim) ? fim : '',
       maquina: maquinaId ?? '',
       implemento: implementoId ?? '',
       horas_maquina: maquinaId || implementoId ? n(horasMaq) : null,
@@ -599,6 +616,14 @@ export default function AtividadeForm() {
     setSalvando(false);
     if (error) return setErro(traduzirErro(error));
     const res = r as { id: string; numero: number; custo: number; baixas: number; custo_mao_obra?: number; custo_maquina?: number };
+    // V198: dias e horários de cada aplicação (para calcular horas e dias, principalmente de terceiros)
+    const periodos = [{ data, inicio, fim }, ...extras]
+      .filter((x) => dataValida(x.data) && horaValida(x.inicio) && horaValida(x.fim))
+      .map((x) => ({ data: paraBanco(x.data), inicio: x.inicio, fim: x.fim, horas: duracaoHoras(x.inicio, x.fim) }));
+    await supabase
+      .from('atividades_agricolas')
+      .update({ periodos, dias: periodos.length ? new Set(periodos.map((x) => x.data)).size : null, horas_total: duracao })
+      .eq('id', res.id);
     const partes = [`Atividade nº ${res.numero} ${id ? 'alterada' : 'lançada'}`];
     if (parcelaIds.length && !id) {
       const { error: em } = await supabase.rpc('marcar_parcelas_adubacao', { p_ids: parcelaIds, p_atividade: res.id });
@@ -889,8 +914,42 @@ export default function AtividadeForm() {
               <Campo rotulo="Fim" value={fim} onChangeText={(t) => setFim(mascaraHora(t))} keyboardType="number-pad" maxLength={5} placeholder="hh:mm" erro={erros.fim} />
             </View>
           </View>
+          {extras.length > 0 && <Text style={estilos.nota}>1º dia: {data || 'informe a Data lá em cima'}{dur1 != null ? ` · ${textoHoras(dur1)}` : ''}</Text>}
+          {extras.map((x, k) => (
+            <View key={x.chave} style={estilos.caixa}>
+              <View style={estilos.itemTopo}>
+                <Text style={estilos.itemNum}>{k + 2}º dia / horário{durExtras[k] != null ? ` · ${textoHoras(durExtras[k])}` : ''}</Text>
+                <Pressable onPress={() => setExtras((l) => l.filter((y) => y.chave !== x.chave))} hitSlop={10} accessibilityLabel={`Tirar o ${k + 2}º dia`}>
+                  <Ionicons name="close-circle" size={24} color={cores.erro} />
+                </Pressable>
+              </View>
+              <CampoData rotulo="Data" valor={x.data} aoMudar={(t) => setExtras((l) => l.map((y) => (y.chave === x.chave ? { ...y, data: t } : y)))} />
+              <View style={estilos.linha}>
+                <View style={{ flex: 1 }}>
+                  <Campo rotulo="Início" value={x.inicio} onChangeText={(t) => setExtras((l) => l.map((y) => (y.chave === x.chave ? { ...y, inicio: mascaraHora(t) } : y)))} keyboardType="number-pad" maxLength={5} placeholder="hh:mm" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Campo rotulo="Fim" value={x.fim} onChangeText={(t) => setExtras((l) => l.map((y) => (y.chave === x.chave ? { ...y, fim: mascaraHora(t) } : y)))} keyboardType="number-pad" maxLength={5} placeholder="hh:mm" />
+                </View>
+              </View>
+              {erros[`per${x.chave}`] && <Text style={estilos.erro}>{erros[`per${x.chave}`]}</Text>}
+            </View>
+          ))}
+          <Pressable
+            onPress={() =>
+              setExtras((l) => {
+                const ult = l.length ? l[l.length - 1] : { data, inicio, fim };
+                return [...l, { chave: chave(), data: diaSeguinte(ult.data), inicio: ult.inicio, fim: ult.fim }];
+              })
+            }
+            accessibilityRole="button"
+            style={{ minHeight: 40, justifyContent: 'center' }}
+          >
+            <Text style={estilos.link}>+ Mais um dia ou horário (outra entrada e saída)</Text>
+          </Pressable>
           {duracao != null && (
             <Text style={estilos.destaque}>
+              {extras.length ? `${qtdDias} ${qtdDias === 1 ? 'dia' : 'dias'} · total ` : ''}
               {textoHoras(duracao)}
               {somaHa ? ` · rendimento ${formatarNumero(somaHa / duracao, 2)} ha/h` : ''}
             </Text>
@@ -949,7 +1008,7 @@ export default function AtividadeForm() {
             );
           })}
           {erros.operadores ? <Text style={estilos.erro}>{erros.operadores}</Text> : null}
-          {operadores.length > 0 && <Text style={estilos.nota}>As horas vêm do horário (início e fim). Se alguém trabalhou menos ou mais, corrija. 8 h = 1 diária.</Text>}
+          {operadores.length > 0 && <Text style={estilos.nota}>As horas vêm do horário (início e fim, somando todos os dias). Se alguém trabalhou menos ou mais, corrija. 8 h = 1 diária.</Text>}
           <CampoPessoaBusca rotulo={operadores.length ? 'Mais alguém' : 'Operador / trabalhador'} valorId={null} aoMudar={incluirOperador} tipoNovo="funcionario" />
 
           <Campo rotulo="Observações" value={obs} onChangeText={setObs} autoCapitalize="sentences" multiline style={{ minHeight: 70, paddingTop: 12 }} />
@@ -980,6 +1039,14 @@ function Par({ a, b, forte }: { a: string; b: string; forte?: boolean }) {
       <Text style={[estilos.parB, forte && { color: cores.primariaEscura }]}>{b}</Text>
     </View>
   );
+}
+
+/** "18/11/2026" -> "19/11/2026" (vazio se a data não for válida) */
+function diaSeguinte(br: string): string {
+  if (!dataValida(br)) return '';
+  const [d, m, a] = br.split('/').map(Number);
+  const x = new Date(a, m - 1, d + 1);
+  return `${String(x.getDate()).padStart(2, '0')}/${String(x.getMonth() + 1).padStart(2, '0')}/${x.getFullYear()}`;
 }
 
 const estilos = StyleSheet.create({

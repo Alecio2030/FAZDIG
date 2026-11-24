@@ -18,7 +18,7 @@ export function usePC(): boolean {
 export const COR_BARRA = cores.primariaEscura;
 export const COR_TEXTO_BARRA = '#FFFFFF';
 
-const NOME_PERFIL: Record<string, string> = { dono: 'Produtor', admin: 'Administrador', escritorio: 'Escritório', gerente: 'Gerente', funcionario: 'Funcionário' };
+const NOME_PERFIL: Record<string, string> = { dono: 'Produtor', admin: 'Administrador', escritorio: 'Escritório', gerente: 'Gerente', funcionario: 'Funcionário', vaqueiro: 'Vaqueiro' };
 
 /**
  * Título da tela e, embaixo, o nome do Grupo (V132).

@@ -11,6 +11,7 @@ import { doBanco } from '../../lib/datas';
 import { formatarMoeda, formatarNumero } from '../../lib/formatos';
 import { codigoLote, idadeRotulo } from '../../lib/rebanho';
 import { useSigla } from '../../lib/useSigla';
+import { textoFinalidade } from '../../lib/lotes';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
 import { cores, tam } from '../../tema';
 
@@ -20,7 +21,7 @@ const num = (v: any, casas = 2) => (v == null ? null : formatarNumero(Number(v),
 const kg = (v: any) => (v == null ? null : `${num(v)} kg`);
 const perc = (v: any) => (v == null ? null : `${num(v)}%`);
 
-const ROTULO_ORIGEM: Record<string, string> = { compra: 'Compra', parceria: 'Parceria', cria: 'Cria (crias da fazenda)', outra: 'Outra' };
+const ROTULO_ORIGEM: Record<string, string> = { compra: 'Compra', parceria: 'Parceria', cria: 'Cria (crias da fazenda)', outros_lotes: 'De outro lote', outra: 'Outra' };
 const ROTULO_PARCERIA: Record<string, string> = { apascentamento: 'Apascentamento', engorda: 'Engorda' };
 
 /** Um lote na Consulta: só mostra os dados. Não inclui nem altera nada. */
@@ -31,6 +32,8 @@ export default function LoteDetalhe() {
   const { sigla } = useSigla(fazendaAtiva?.id);
   const [l, setL] = useState<any>(null);
   const [cabecas, setCabecas] = useState(0);
+  const [formacao, setFormacao] = useState<{ origem: string; cab: number }[]>([]);
+  const [individuais, setIndividuais] = useState<any[]>([]);
   const [erro, setErro] = useState<string | null>(null);
 
   useLayoutEffect(() => {
@@ -55,11 +58,41 @@ export default function LoteDetalhe() {
           setL({ ...x, manga: um(x.manga), dono: um(x.dono), raca: um(x.raca), ferro: um(x.ferro), mineral: um(x.mineral), alimentar: um(x.alimentar) });
           const { count } = await supabase.from('animais').select('id', { count: 'exact', head: true }).eq('lote_id', params.id).eq('situacao', 'ativo');
           setCabecas(count ?? 0);
+          // V200: de onde vieram os animais (lote formado de outros lotes)
+          if (x.origem === 'outros_lotes') {
+            const movs = await consulta<any[]>(
+              supabase
+                .from('movimentacoes')
+                .select('id, lote_origem:lotes!movimentacoes_lote_origem_id_fkey ( numero, descricao ), movimentacao_itens ( id )')
+                .eq('lote_destino_id', params.id)
+                .eq('tipo', 'transferencia_lote')
+                .like('observacoes', 'Formação do lote%'),
+            );
+            setFormacao(
+              movs.map((m) => {
+                const lo = um(m.lote_origem);
+                return { origem: lo ? codigoLote(lo.numero, sigla) + (lo.descricao ? ` – ${lo.descricao}` : '') : 'Rebanho individual (sem lote)', cab: (m.movimentacao_itens ?? []).length };
+              }),
+            );
+          } else setFormacao([]);
+          if (x.controle_individual) {
+            setIndividuais(
+              await consulta<any[]>(
+                supabase
+                  .from('animais')
+                  .select('id, numero_interno, brinco, peso_atual_kg, peso_atual_data, ferro:ferros!animais_ferro_id_fkey ( descricao )')
+                  .eq('lote_id', params.id)
+                  .eq('situacao', 'ativo')
+                  .order('numero_interno')
+                  .limit(500),
+              ),
+            );
+          } else setIndividuais([]);
         } catch (e) {
           setErro(traduzirErro(e));
         }
       })();
-    }, [params.id]),
+    }, [params.id, sigla]),
   );
 
   if (erro) {
@@ -106,8 +139,13 @@ export default function LoteDetalhe() {
         </Text>
       </View>
 
+      <Dado rotulo="Finalidade" valor={textoFinalidade(l.finalidade, l.finalidade_outra)} />
+
       <Secao titulo="Origem" />
       <Dado rotulo="Origem" valor={origem} />
+      {formacao.map((f, i) => (
+        <Dado key={i} rotulo={i === 0 ? 'Veio de' : ''} valor={`${f.origem}: ${formatarNumero(f.cab)} cab.`} />
+      ))}
       {engorda && (
         <>
           <Dado rotulo="% do Criador" valor={perc(l.perc_criador)} />
@@ -141,6 +179,30 @@ export default function LoteDetalhe() {
       <Secao titulo="Proprietário e local" />
       <Dado rotulo="Animais" valor={l.proprietario === 'terceiro' ? `De terceiro: ${l.dono?.nome ?? VAZIO}` : 'Próprios'} />
       <Dado rotulo="Manga" valor={l.manga?.nome} />
+
+      <Dado rotulo="Controle individual" valor={l.controle_individual ? 'Sim (brinco e ferro de cada animal)' : 'Não'} />
+
+      {l.controle_individual && individuais.length > 0 && (
+        <>
+          <Secao titulo="Animais do lote" />
+          <View style={[estilos.dado, { borderBottomWidth: 2 }]}>
+            <Text style={[estilos.col, estilos.colCab, { width: 60, flex: 0 }]}>Nº</Text>
+            <Text style={[estilos.col, estilos.colCab]}>Brinco</Text>
+            <Text style={[estilos.col, estilos.colCab]}>Ferro</Text>
+            <Text style={[estilos.col, estilos.colCab, { textAlign: 'right' }]}>Último peso</Text>
+          </View>
+          {individuais.map((a) => (
+            <View key={a.id} style={estilos.dado}>
+              <Text style={[estilos.col, { width: 60, flex: 0 }]}>{a.numero_interno}</Text>
+              <Text style={[estilos.col, { fontWeight: '600' }]}>{a.brinco || VAZIO}</Text>
+              <Text style={estilos.col} numberOfLines={1}>{um(a.ferro)?.descricao || VAZIO}</Text>
+              <Text style={[estilos.col, { textAlign: 'right' }]}>
+                {a.peso_atual_kg != null ? `${num(a.peso_atual_kg)} kg${a.peso_atual_data ? ` · ${doBanco(a.peso_atual_data)}` : ''}` : VAZIO}
+              </Text>
+            </View>
+          ))}
+        </>
+      )}
 
       <Secao titulo="Mineral e alimentação" />
       <Dado rotulo="Mineral" valor={l.mineral?.nome} />
@@ -176,5 +238,7 @@ const estilos = StyleSheet.create({
   saldo: { fontSize: tam.subtitulo, fontWeight: '700', color: cores.cafe },
   dado: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: cores.borda },
   dadoRotulo: { flex: 1, fontSize: tam.pequeno + 1, color: cores.textoSuave },
+  col: { flex: 1, fontSize: tam.pequeno, color: cores.texto },
+  colCab: { fontWeight: '700', color: cores.textoSuave },
   dadoValor: { flex: 1, fontSize: tam.pequeno + 1, color: cores.texto, fontWeight: '600', textAlign: 'right' },
 });

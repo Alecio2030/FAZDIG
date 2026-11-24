@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { SUPABASE_URL } from '../config';
 import { lerRelacaoAgendas, type AgendaInfo } from '../lib/agenda';
 import { lerRetornoDoEmail } from '../lib/web';
 
@@ -10,7 +11,7 @@ export type FazendaAcesso = {
   nome: string;
   municipio: string | null;
   uf: string | null;
-  perfil: 'dono' | 'admin' | 'gerente' | 'funcionario' | 'escritorio';
+  perfil: 'dono' | 'admin' | 'gerente' | 'funcionario' | 'escritorio' | 'vaqueiro';
   nivel: 'completo' | 'lancamento';
   /** vê a aba Financeiro, os saldos e as contas a pagar e a receber desta fazenda */
   financeiro: boolean;
@@ -51,6 +52,20 @@ type SessaoValor = {
 };
 
 const CHAVE_FAZENDA_ATIVA = 'fazendaAtiva';
+
+/** A sessão que o Supabase guardou no aparelho (chave sb-<projeto>-auth-token). */
+async function sessaoGuardada(): Promise<Session | null> {
+  try {
+    const ref = new URL(SUPABASE_URL).hostname.split('.')[0];
+    const txt = await AsyncStorage.getItem(`sb-${ref}-auth-token`);
+    if (!txt) return null;
+    const j = JSON.parse(txt);
+    const s = (j?.currentSession ?? j) as Session;
+    return s?.user?.id && s?.refresh_token ? s : null;
+  } catch {
+    return null;
+  }
+}
 const CHAVE_MODO_ADM = 'modoAdm';
 const SessaoContext = createContext<SessaoValor | null>(null);
 
@@ -82,8 +97,12 @@ export function SessaoProvider({ children }: { children: React.ReactNode }) {
             .then(({ error }) => setNovaSenha(error ? { erro: 'Este link já foi usado ou venceu. Peça outro e-mail em "Esqueci minha senha".' } : 'pronta')))
         : (retorno?.tipo === 'erro' && setNovaSenha({ erro: retorno.mensagem }), Promise.resolve());
     inicio.then(() =>
-      supabase.auth.getSession().then(({ data }) => {
-        setSessao(data.session);
+      supabase.auth.getSession().then(async ({ data, error }) => {
+        let s = data.session;
+        // V184: sem sinal e com o acesso vencido, o Supabase não consegue renovar e devolve vazio.
+        // Usa a sessão guardada no aparelho (renova sozinha quando o sinal voltar), para o Modo Vaqueiro abrir no campo.
+        if (!s && error) s = await sessaoGuardada();
+        setSessao(s);
         setSessaoPronta(true);
       }),
     );
@@ -129,7 +148,23 @@ export function SessaoProvider({ children }: { children: React.ReactNode }) {
     // Banco ainda sem a atualização da V122 (coluna "financeiro"): entra como antes, vendo tudo.
     if (error && /financeiro/i.test(error.message ?? '')) ({ data, error } = await ler('perfil, nivel, fazendas ( id, nome, municipio, uf, ativa )'));
 
+    // V184: sem sinal, entra com as fazendas guardadas no aparelho da última vez (o Modo Vaqueiro funciona assim)
+    const chaveCache = `fazendasCache_${userId}`;
     if (error) {
+      const guardado = await AsyncStorage.getItem(chaveCache).catch(() => null);
+      if (guardado && /fetch|network|failed|internet|timeout|load/i.test(error.message ?? '')) {
+        try {
+          const lc = JSON.parse(guardado) as FazendaAcesso[];
+          const salvaC = await AsyncStorage.getItem(CHAVE_FAZENDA_ATIVA).catch(() => null);
+          setFazendas(lc);
+          setFazendaAtivaId((lc.find((f) => f.id === salvaC) ?? lc.find((f) => f.tipo === 'fazenda') ?? lc[0])?.id ?? null);
+          setLidoPara(userId);
+          setCarregandoFazendas(false);
+          return;
+        } catch {
+          // guardado estragado: segue para o aviso de erro
+        }
+      }
       setErroFazendas(error.message);
       setLidoPara(userId);
       setCarregandoFazendas(false);
@@ -150,7 +185,8 @@ export function SessaoProvider({ children }: { children: React.ReactNode }) {
     // sem escolha gravada, abre numa fazenda (e não no Particular)
     const escolhida = lista.find((f) => f.id === salva) ?? lista.find((f) => f.tipo === 'fazenda') ?? lista[0] ?? null;
     const adm = (await AsyncStorage.getItem(CHAVE_MODO_ADM).catch(() => null)) === '1';
-    setModoAdm(adm && lista.some((f) => f.perfil === 'dono' || f.perfil === 'admin' || f.perfil === 'escritorio'));
+    AsyncStorage.setItem(chaveCache, JSON.stringify(lista)).catch(() => {});
+    setModoAdm(adm && lista.some((f) => f.perfil === 'dono' || f.perfil === 'admin' || (f.perfil === 'escritorio' && f.financeiro)));
     setFazendas(lista);
     setFazendaAtivaId(escolhida?.id ?? null);
     const [relacao] = await Promise.all([lista.length ? lerRelacaoAgendas().catch(() => []) : Promise.resolve([]), recarregarGrupo().catch(() => undefined)]);

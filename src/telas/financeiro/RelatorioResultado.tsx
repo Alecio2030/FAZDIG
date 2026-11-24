@@ -8,6 +8,7 @@ import Escolha from '../../componentes/Escolha';
 import { useSessao } from '../../contexto/SessaoContext';
 import { ADM, TODAS, idsRelatorio, opcoesRelatorio, rotuloRelatorio } from '../../lib/unidades';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
+import { planoCompleto } from '../../lib/planoTodo';
 import { dataValida, doBanco, hojeBanco, paraBanco } from '../../lib/datas';
 import { formatarMoeda } from '../../lib/formatos';
 import { somarMeses } from '../../lib/financiamentos';
@@ -79,7 +80,7 @@ export default function RelatorioResultado() {
   const qual = quais[0];
 
   useEffect(() => {
-    consulta<Conta[]>(supabase.from('plano_contas').select('id, codigo, nome, tipo, conta_pai_id'))
+    planoCompleto<Conta>('id, codigo, nome, tipo, conta_pai_id') // V176: o plano passa de 1.000 contas
       .then(setPlano)
       .catch((e) => setErro(traduzirErro(e)));
   }, []);

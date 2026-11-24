@@ -15,7 +15,7 @@ import EstruturaManga, { type EstruturaEd } from '../../componentes/EstruturaMan
 import { MANEJO_VAZIO, conferirManejo, manejoPreenchido, registroManejo } from '../../componentes/CamposManejo';
 import { useSessao } from '../../contexto/SessaoContext';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
-import { lerNumero, numeroParaCampo } from '../../lib/formatos';
+import { formatarNumero, lerNumero, numeroParaCampo } from '../../lib/formatos';
 import { dataValida, doBanco, paraBanco } from '../../lib/datas';
 import { CATEGORIAS, ORDEM_CATEGORIAS, TOPOGRAFIAS, sugestoesUso, type Categoria } from '../../lib/mangas';
 import type { NavPilha, PilhaParams } from '../../navegacao/rotas';
@@ -59,6 +59,72 @@ export default function AreaForm() {
   const [altSaida, setAltSaida] = useState('');
   const [descanso, setDescanso] = useState('');
   const [topografia, setTopografia] = useState('');
+  // V198: risco de inundação (nenhum, total ou parcial com %) e grau (baixo, médio, alto)
+  const [inundTipo, setInundTipo] = useState('nenhum');
+  const [inundPerc, setInundPerc] = useState('');
+  const [inundRisco, setInundRisco] = useState('');
+  // V195: capim da tabela (para a estimativa das águas e da seca) e fertilidade do solo
+  const [capimId, setCapimId] = useState<string | null>(null);
+  const [fertilidade, setFertilidade] = useState('media');
+  const [capins, setCapins] = useState<any[]>([]);
+  const [parPasto, setParPasto] = useState<any>(null);
+  useEffect(() => {
+    supabase.from('capins').select('*').eq('ativo', true).order('nome').then(({ data }) => setCapins((data ?? []) as any[]));
+    supabase.from('pastagem_parametros').select('*').eq('id', 1).maybeSingle().then(({ data }) => setParPasto(data ?? null));
+  }, []);
+  // V195: o capim digitado é reconhecido pelo nome quando não foi escolhido na tabela
+  const capimCalc = (() => {
+    if (capimId) return capins.find((c) => c.id === capimId) ?? null;
+    const t = cultura.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (!t) return null;
+    return [...capins].sort((a, b) => a.prioridade - b.prioridade).find((c) => (c.palavras ?? []).some((w: string) => t.includes(w))) ?? null;
+  })();
+  /** cálculo da manga nas águas e na seca, refeito enquanto se digita */
+  const calc = (() => {
+    const area = lerNumero(areaHa);
+    if (!capimCalc || !parPasto || !area || area <= 0) return null;
+    const ini = Number(parPasto.mes_aguas_ini), fim = Number(parPasto.mes_aguas_fim);
+    const nasAguas = (m: number) => (ini <= fim ? m >= ini && m <= fim : m >= ini || m <= fim);
+    let diasAguas = 0;
+    for (let m = 1; m <= 12; m++) if (nasAguas(m)) diasAguas += new Date(2025, m, 0).getDate();
+    const fator = Number(fertilidade === 'fraca' ? parPasto.fator_fraca : fertilidade === 'boa' ? parPasto.fator_boa : parPasto.fator_media);
+    const consumo = (Number(parPasto.ua_kg) * Number(parPasto.consumo_perc_pv)) / 100;
+    const est = (aguas: boolean) => {
+      const dias = aguas ? diasAguas : 365 - diasAguas;
+      const perc = aguas ? Number(capimCalc.perc_aguas) : 100 - Number(capimCalc.perc_aguas);
+      const bio = (Number(capimCalc.ms_ano_t) * 1000 * fator * perc) / 100;
+      const uaHa = Math.round(((bio * Number(parPasto.eficiencia_perc)) / 100 / (consumo * dias)) * 100) / 100;
+      const ua = uaHa * area;
+      const cab = Object.fromEntries(Object.entries(parPasto.pesos ?? {}).map(([k, kg]) => [k, Math.floor(ua / (Number(kg) / Number(parPasto.ua_kg)))]));
+      return {
+        bio: Math.round(bio), uaHa, ua, cab,
+        gmd: aguas ? capimCalc.gmd_aguas : capimCalc.gmd_seca,
+        descanso: aguas ? capimCalc.descanso_aguas : capimCalc.descanso_seca,
+      };
+    };
+    return { aguas: est(true), seca: est(false), entrada: capimCalc.altura_entrada_cm, saida: capimCalc.altura_saida_cm, capim: capimCalc.nome };
+  })();
+  // os campos de valores já vêm com o calculado; o que a pessoa digitar por cima fica
+  const autoRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!calc) return;
+    const novos: [string, string, (v: string) => void, string][] = [
+      ['gmd', numeroParaCampo(calc.aguas.gmd), setGmd, gmd],
+      ['bio', numeroParaCampo(calc.aguas.bio), setBiomassa, biomassa],
+      ['aguas', numeroParaCampo(calc.aguas.uaHa), setCapAguas, capAguas],
+      ['seca', numeroParaCampo(calc.seca.uaHa), setCapSeca, capSeca],
+      ['ent', numeroParaCampo(calc.entrada), setAltEntrada, altEntrada],
+      ['sai', numeroParaCampo(calc.saida), setAltSaida, altSaida],
+      ['desc', calc.aguas.descanso != null ? String(calc.aguas.descanso) : '', setDescanso, descanso],
+    ];
+    for (const [k, v, set, atual] of novos) {
+      if (atual === '' || atual === autoRef.current[k]) {
+        set(v);
+        autoRef.current[k] = v;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calc?.capim, calc?.aguas.uaHa, calc?.seca.uaHa, calc?.aguas.gmd, calc?.aguas.bio, calc?.entrada, calc?.saida, calc?.aguas.descanso]);
   // Manga: estruturas
   const [estruturas, setEstruturas] = useState<EstruturaEd[]>([]);
   const removidas = useRef<string[]>([]);
@@ -95,6 +161,11 @@ export default function AreaForm() {
         setAltSaida(numeroParaCampo(data.altura_saida_cm));
         setDescanso(data.descanso_dias != null ? String(data.descanso_dias) : '');
         setTopografia(data.topografia ?? '');
+        setInundTipo(data.inundacao_tipo ?? 'nenhum');
+        setInundPerc(data.inundacao_perc != null ? numeroParaCampo(data.inundacao_perc) : '');
+        setInundRisco(data.inundacao_risco ?? '');
+        setCapimId(data.capim_id ?? null);
+        setFertilidade(data.fertilidade ?? 'media');
         if (data.tipo === 'manga') {
           const est = await consulta<any[]>(supabase.from('manga_estruturas').select('*').eq('area_id', id).order('created_at'));
           const man = est.length
@@ -173,6 +244,13 @@ export default function AreaForm() {
     const vEnt = manga ? num(altEntrada, 'entrada', 'Altura de entrada') : null;
     const vSai = manga ? num(altSaida, 'saida', 'Altura de saída') : null;
     if (manga && dataSolo.trim() && !dataValida(dataSolo)) falha('solo', 'Data da análise do solo', 'data inválida (use dd/mm/aaaa)');
+    let vInundPerc: number | null = null;
+    if (manga && inundTipo === 'parcial') {
+      vInundPerc = num(inundPerc, 'inundPerc', 'Área sujeita a inundação');
+      if (vInundPerc === null && !erros.inundPerc) falha('inundPerc', 'Área sujeita a inundação', 'informe o percentual da área');
+      else if (vInundPerc !== null && (vInundPerc <= 0 || vInundPerc >= 100)) falha('inundPerc', 'Área sujeita a inundação', 'entre 1 e 99% (100% é Total)');
+    }
+    if (manga && inundTipo !== 'nenhum' && !inundRisco) falha('inundRisco', 'Risco de inundação', 'escolha Baixo, Médio ou Alto');
     if (manga && vEnt !== null && vSai !== null && vSai >= vEnt) falha('saida', 'Altura de saída', 'deve ser menor que a de entrada');
     const errosEst: Record<string, string> = {};
     if (manga) {
@@ -223,6 +301,15 @@ export default function AreaForm() {
         altura_saida_cm: vSai,
         descanso_dias: manga && descanso ? Number(descanso) : null,
         topografia: manga ? topografia || null : null,
+        ...(manga
+          ? {
+              capim_id: capimId,
+              fertilidade,
+              inundacao_tipo: inundTipo,
+              inundacao_perc: inundTipo === 'total' ? 100 : inundTipo === 'parcial' ? vInundPerc : null,
+              inundacao_risco: inundTipo === 'nenhum' ? null : inundRisco || null,
+            }
+          : {}),
       };
       const areaId = id
         ? (await consulta<any>(supabase.from('areas').update(registro).eq('id', id).select('id').single())).id
@@ -320,6 +407,36 @@ export default function AreaForm() {
     </View>
   );
 
+  const FAIXAS_CAB: [string, string][] = [
+    ['M0', 'Machos 0 a 12 meses'], ['M13', 'Machos 13 a 24'], ['M25', 'Machos 25 a 36'], ['M37', 'Machos + 36'],
+    ['F0', 'Fêmeas 0 a 2 meses'], ['F3', 'Fêmeas 3 a 8'], ['F9', 'Fêmeas 9 a 12'], ['F13', 'Fêmeas 13 a 24'], ['F25', 'Fêmeas 25 a 36'], ['F37', 'Fêmeas + 36'],
+  ];
+  function calculo() {
+    if (!calc) return <Text style={{ fontSize: tam.pequeno + 1, color: cores.textoSuave }}>Informe a área e o capim para o sistema calcular a capacidade nas águas e na seca.</Text>;
+    const n = (v: any, c = 0) => (v != null && v !== '' ? formatarNumero(Number(v), c) : '–');
+    const linha = (rot: string, a: string, b: string, cab = false) => (
+      <View key={rot} style={{ flexDirection: 'row', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: cores.borda }}>
+        <Text style={{ flex: 2, fontSize: tam.pequeno + 1, color: cab ? cores.cafe : cores.texto, fontWeight: cab ? '700' : '400' }}>{rot}</Text>
+        <Text style={{ flex: 1, textAlign: 'right', fontSize: tam.pequeno + 1, color: cab ? cores.cafe : cores.texto, fontWeight: cab ? '700' : '600' }}>{a}</Text>
+        <Text style={{ flex: 1, textAlign: 'right', fontSize: tam.pequeno + 1, color: cab ? cores.cafe : cores.texto, fontWeight: cab ? '700' : '600' }}>{b}</Text>
+      </View>
+    );
+    const { aguas: ag, seca: se } = calc;
+    return (
+      <View style={{ backgroundColor: cores.cartao, borderRadius: tam.raio, borderWidth: 1, borderColor: cores.borda, padding: tam.espaco }}>
+        {linha(`Calculado · ${calc.capim}`, 'Águas', 'Seca', true)}
+        {linha('MS (kg/ha)', n(ag.bio), n(se.bio))}
+        {linha('Capacidade (UA/ha)', n(ag.uaHa, 2), n(se.uaHa, 2))}
+        {linha('Capacidade na manga (UA)', n(ag.ua, 1), n(se.ua, 1))}
+        {linha('GMD estimado (kg/dia)', n(ag.gmd, 2), n(se.gmd, 2))}
+        {linha('Período de descanso (dias)', n(ag.descanso), n(se.descanso))}
+        {linha('Altura entrada / saída (cm)', `${n(calc.entrada)} / ${n(calc.saida)}`, `${n(calc.entrada)} / ${n(calc.saida)}`)}
+        {linha('Capacidade em cabeças', 'Águas', 'Seca', true)}
+        {FAIXAS_CAB.map(([k, r]) => linha(r, n(ag.cab[k]), n(se.cab[k])))}
+      </View>
+    );
+  }
+
   return (
     <Tela>
       {abas}
@@ -339,21 +456,47 @@ export default function AreaForm() {
         <Campo rotulo="Área (ha)" value={areaHa} onChangeText={setAreaHa} keyboardType="decimal-pad" placeholder="0,00" erro={errosCampo.area} />,
         <Campo rotulo="Perímetro (m)" value={perimetro} onChangeText={setPerimetro} keyboardType="decimal-pad" placeholder="0" erro={errosCampo.perimetro} />,
       )}
-      <Campo
-        rotulo={nomes.cultura}
-        value={cultura}
-        onChangeText={setCultura}
-        autoCapitalize="sentences"
-        placeholder={manga ? 'Ex.: Braquiária, Mombaça' : 'Ex.: Café conilon'}
-      />
+      {!manga && (
+        <Campo rotulo={nomes.cultura} value={cultura} onChangeText={setCultura} autoCapitalize="sentences" placeholder="Ex.: Café conilon" />
+      )}
+      {manga && capins.length > 0 && (
+        <Escolha
+          rotulo="Capim para a estimativa"
+          opcoes={capins.map((c) => ({ valor: c.id, rotulo: c.nome }))}
+          valor={capimId ? [capimId] : []}
+          aoMudar={(v) => {
+            const novo = v[0] === capimId ? null : v[0] ?? null;
+            setCapimId(novo);
+            const nomeCapim = capins.find((c) => c.id === novo)?.nome;
+            if (nomeCapim && !cultura.trim()) setCultura(nomeCapim);
+          }}
+        />
+      )}
+      {manga && (
+        <Escolha
+          rotulo="Fertilidade do solo"
+          opcoes={[
+            { valor: 'fraca', rotulo: 'Fraca' },
+            { valor: 'media', rotulo: 'Média' },
+            { valor: 'boa', rotulo: 'Boa' },
+          ]}
+          valor={[fertilidade]}
+          aoMudar={(v) => v.length && setFertilidade(v[0])}
+        />
+      )}
+      {manga && calculo()}
+      {manga && (
+        <Campo rotulo={nomes.cultura} value={cultura} onChangeText={setCultura} autoCapitalize="sentences" placeholder="Ex.: Braquiária, Mombaça" />
+      )}
+      {manga && <ItemMenu icone="leaf-outline" titulo="Tabela de capins" descricao="Produção, GMD, descanso e alturas usados na estimativa" onPress={() => navegacao.navigate('Capins')} />}
 
       {manga && (
         <>
           <Secao titulo="Uso e produção" />
           <CampoSugestao rotulo="Indicação de uso" valor={uso} aoMudar={setUso} carregar={sugestoesUso} placeholder="Ex.: Recria" />
           {dupla(
-            <Campo rotulo="GMD potencial (kg/dia)" value={gmd} onChangeText={setGmd} keyboardType="decimal-pad" placeholder="0,000" erro={errosCampo.gmd} />,
-            <Campo rotulo="Biomassa (kg MS/ha)" value={biomassa} onChangeText={setBiomassa} keyboardType="decimal-pad" placeholder="0" erro={errosCampo.biomassa} />,
+            <Campo rotulo="GMD águas (kg/dia)" value={gmd} onChangeText={setGmd} keyboardType="decimal-pad" placeholder="0,000" erro={errosCampo.gmd} />,
+            <Campo rotulo="MS águas (kg/ha)" value={biomassa} onChangeText={setBiomassa} keyboardType="decimal-pad" placeholder="0" erro={errosCampo.biomassa} />,
           )}
           <CampoData rotulo="Data da análise do solo" valor={dataSolo} aoMudar={setDataSolo} erro={errosCampo.solo} />
           {dupla(
@@ -367,7 +510,7 @@ export default function AreaForm() {
             <Campo rotulo="Altura de saída (cm)" value={altSaida} onChangeText={setAltSaida} keyboardType="decimal-pad" placeholder="0" erro={errosCampo.saida} />,
           )}
           <Campo
-            rotulo="Período de descanso (dias)"
+            rotulo="Período de descanso águas (dias)"
             value={descanso}
             onChangeText={(t) => setDescanso(t.replace(/\D/g, '').slice(0, 4))}
             keyboardType="number-pad"
@@ -379,6 +522,45 @@ export default function AreaForm() {
             valor={topografia ? [topografia] : []}
             aoMudar={(v) => setTopografia(v[0] === topografia ? '' : v[0])}
           />
+          <Escolha
+            rotulo="Risco de inundação"
+            opcoes={[
+              { valor: 'nenhum', rotulo: 'Não tem' },
+              { valor: 'total', rotulo: 'Total' },
+              { valor: 'parcial', rotulo: 'Parcial' },
+            ]}
+            valor={[inundTipo]}
+            aoMudar={(v) => v.length && setInundTipo(v[0])}
+          />
+          {inundTipo === 'parcial' && (
+            <Campo
+              rotulo="Área sujeita a inundação (%) *"
+              value={inundPerc}
+              onChangeText={(t) => setInundPerc(t.replace(/[^\d,]/g, '').slice(0, 5))}
+              keyboardType="decimal-pad"
+              placeholder="Ex.: 30"
+              erro={errosCampo.inundPerc}
+              ajuda={(() => {
+                const p = lerNumero(inundPerc), h = lerNumero(areaHa);
+                return p && h ? `${formatarNumero((h * p) / 100, 2)} ha de ${formatarNumero(h, 2)} ha` : undefined;
+              })()}
+            />
+          )}
+          {inundTipo !== 'nenhum' && (
+            <>
+              <Escolha
+                rotulo="Grau do risco *"
+                opcoes={[
+                  { valor: 'baixo', rotulo: 'Baixo' },
+                  { valor: 'medio', rotulo: 'Médio' },
+                  { valor: 'alto', rotulo: 'Alto' },
+                ]}
+                valor={inundRisco ? [inundRisco] : []}
+                aoMudar={(v) => setInundRisco(v[0] === inundRisco ? '' : v[0] ?? '')}
+              />
+              {errosCampo.inundRisco && <Text style={{ fontSize: tam.pequeno, color: cores.erro }}>{errosCampo.inundRisco}</Text>}
+            </>
+          )}
 
           <Secao titulo="Bebedouros, cochos e cercas" />
           {estruturas.length === 0 && <Text style={{ fontSize: tam.pequeno + 1, color: cores.textoSuave }}>Nenhum cadastrado. Toque abaixo para incluir; pode ter mais de um de cada.</Text>}

@@ -40,7 +40,9 @@ type Filtro =
   | { tipo: 'sexo'; sexo: 'M' | 'F'; rotulo: string }
   | { tipo: 'saiu' };
 
-type Resumo = { total: number; femeas: number; machos: number; semLote: number; saiu: number; porCategoria: Record<string, number> };
+type Resumo = { total: number; femeas: number; machos: number; semLote: number; saiu: number; porCategoria: Record<string, number>; faixas: FaixaEstoque[] };
+/** V162: estoque por sexo e faixa de idade (as faixas da GTA e da NF-e) */
+type FaixaEstoque = { sexo: 'M' | 'F'; faixa: string; cabecas: number };
 
 const um = (v: any) => (Array.isArray(v) ? v[0] ?? null : v ?? null);
 const limpar = (t: string) => t.replace(/[,()*%\\]/g, '').trim();
@@ -82,7 +84,8 @@ export default function Animais() {
         ),
         supabase.from('animais').select('id', { count: 'exact', head: true }).eq('fazenda_id', fid).neq('situacao', 'ativo'),
       ]);
-      const r: Resumo = { total: ativos.length, femeas: 0, machos: 0, semLote: 0, saiu: saiu.count ?? 0, porCategoria: {} };
+      const { data: faixas } = await supabase.rpc('estoque_gado_faixas', { p_fazenda: fid });
+      const r: Resumo = { total: ativos.length, femeas: 0, machos: 0, semLote: 0, saiu: saiu.count ?? 0, porCategoria: {}, faixas: ((faixas ?? []) as FaixaEstoque[]).filter((x) => x.cabecas > 0) };
       for (const a of ativos) {
         if (a.sexo?.trim() === 'F') r.femeas++;
         if (a.sexo?.trim() === 'M') r.machos++;
@@ -254,6 +257,21 @@ export default function Animais() {
               <Linha titulo="Fêmeas" direita={formatarNumero(resumo.femeas)} onPress={() => setFiltro({ tipo: 'sexo', sexo: 'F', rotulo: 'Fêmeas' })} />
               <Linha titulo="Machos" direita={formatarNumero(resumo.machos)} onPress={() => setFiltro({ tipo: 'sexo', sexo: 'M', rotulo: 'Machos' })} />
             </Lista>
+            {resumo.faixas.length > 0 && (
+              <>
+                <Text style={estilos.secao}>Por faixa de idade (GTA)</Text>
+                <Lista>
+                  {resumo.faixas.map((x) => (
+                    <Linha
+                      key={`${x.sexo}${x.faixa}`}
+                      titulo={`${x.sexo === 'M' ? 'Machos' : 'Fêmeas'} ${x.faixa}`}
+                      direita={formatarNumero(x.cabecas)}
+                      onPress={() => setFiltro({ tipo: 'sexo', sexo: x.sexo, rotulo: x.sexo === 'M' ? 'Machos' : 'Fêmeas' })}
+                    />
+                  ))}
+                </Lista>
+              </>
+            )}
             <Text style={estilos.secao}>Por categoria</Text>
             <Lista>
               {categorias.map(([cat, n]) => (

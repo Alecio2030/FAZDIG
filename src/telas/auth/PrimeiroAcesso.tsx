@@ -40,7 +40,8 @@ export default function PrimeiroAcesso() {
     if (!produtor.trim()) return setErro('Informe o nome do produtor (como sai nas notas).');
     if (!cpfCnpjValido(documento)) return setErro('CPF ou CNPJ inválido. Confira os números.');
     if (!fazenda.trim()) return setErro('Informe o nome da fazenda.');
-    if (uf && !/^[A-Za-z]{2}$/.test(uf.trim())) return setErro('A UF tem 2 letras, por exemplo ES.');
+    if (!municipio.trim()) return setErro('Informe o município da fazenda.');
+    if (!/^[A-Za-z]{2}$/.test(uf.trim())) return setErro('Informe a UF da fazenda (2 letras, por exemplo ES).');
 
     setEnviando(true);
     const { error } = await supabase.rpc('configurar_primeiro_acesso', {
@@ -105,10 +106,10 @@ export default function PrimeiroAcesso() {
       <Campo rotulo="Nome da fazenda" value={fazenda} onChangeText={setFazenda} autoCapitalize="words" />
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <View style={{ flex: 1 }}>
-          <Campo rotulo="Município" value={municipio} onChangeText={setMunicipio} autoCapitalize="words" />
+          <Campo rotulo="Município *" value={municipio} onChangeText={setMunicipio} autoCapitalize="words" />
         </View>
         <View style={{ width: 84 }}>
-          <Campo rotulo="UF" value={uf} onChangeText={(t) => setUf(t.replace(/[^A-Za-z]/g, '').toUpperCase())} autoCapitalize="characters" maxLength={2} />
+          <Campo rotulo="UF *" value={uf} onChangeText={(t) => setUf(t.replace(/[^A-Za-z]/g, '').toUpperCase())} autoCapitalize="characters" maxLength={2} />
         </View>
       </View>
 

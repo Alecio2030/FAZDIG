@@ -8,11 +8,12 @@ import Linha from '../../componentes/Linha';
 import Lista from '../../componentes/Lista';
 import Aviso from '../../componentes/Aviso';
 import Secao from '../../componentes/Secao';
+import CampoData from '../../componentes/CampoData';
 import { useSessao } from '../../contexto/SessaoContext';
 import Escolha from '../../componentes/Escolha';
 import { TODAS, filtrarUnidade, nomeUnidade, opcoesFiltroUnidade } from '../../lib/unidades';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
-import { doBanco, hojeBanco } from '../../lib/datas';
+import { dataValida, doBanco, hojeBR, hojeBanco, paraBanco } from '../../lib/datas';
 import { formatarMoeda } from '../../lib/formatos';
 import { limparBusca } from '../../lib/useBusca';
 import { CAMPOS_TITULO, ROTULO_BAIXA, limitesMes, linhasTitulo, nomeMes, saldoTitulo, somarMeses, textosTitulo, um, type TipoTitulo, type Titulo } from '../../lib/titulos';
@@ -42,7 +43,24 @@ export default function ConsultaTitulos({ tipo = 'pagar' }: { tipo?: TipoTitulo 
   const [lista, setLista] = useState<any[] | null>(null);
   const [mes, setMes] = useState(limitesMes(hojeBanco()).inicio);
   const [erro, setErro] = useState<string | null>(null);
+  // V178: totais vencidos e a vencer no alto e as contas que vencem num período (abre no dia de hoje).
+  const [abertos, setAbertos] = useState<Titulo[] | null>(null);
+  const [de, setDe] = useState(hojeBR());
+  const [ate, setAte] = useState(hojeBR());
   const termo = limparBusca(busca);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!fid) return;
+      (async () => {
+        try {
+          setAbertos(await consulta<Titulo[]>(filtrarUnidade(supabase.from('lancamentos').select(CAMPOS_TITULO).eq('tipo', tipo).in('situacao', ['aberto', 'parcial']), und).order('data_vencimento').order('numero').limit(3000)));
+        } catch (e) {
+          setErro(traduzirErro(e));
+        }
+      })();
+    }, [fid, tipo, und]),
+  );
 
   useEffect(() => {
     if (!fid || !termo) return setAchados(null);
@@ -98,6 +116,70 @@ export default function ConsultaTitulos({ tipo = 'pagar' }: { tipo?: TipoTitulo 
   const linhaTitulo = (t: Titulo) => (
     <Linha key={t.id} titulo={`Nº ${t.numero} · ${t.descricao ?? 'Título'}`} linhas={[...linhasTitulo(t), nomeUnidade(t.fazenda_id, fazendas)]} direita={formatarMoeda(t.situacao === 'parcial' ? saldoTitulo(t) : Number(t.valor))} onPress={() => navegacao.navigate('TituloDetalhe', { id: t.id })} />
   );
+
+  function quadroTotais() {
+    if (abertos === null) return <ActivityIndicator color={cores.primaria} style={{ marginTop: 8 }} />;
+    const hoje = hojeBanco();
+    const vencido = abertos.filter((t) => t.data_vencimento < hoje).reduce((s, t) => s + saldoTitulo(t), 0);
+    const aVencer = abertos.filter((t) => t.data_vencimento >= hoje).reduce((s, t) => s + saldoTitulo(t), 0);
+    return (
+      <View style={estilos.totais}>
+        <View style={{ flex: 1 }}>
+          <Text style={estilos.totRotulo}>Vencido</Text>
+          <Text style={[estilos.totValor, vencido > 0 && { color: cores.erro }]}>{formatarMoeda(vencido)}</Text>
+        </View>
+        <View style={{ flex: 1, alignItems: 'center' }}>
+          <Text style={estilos.totRotulo}>A vencer</Text>
+          <Text style={estilos.totValor}>{formatarMoeda(aVencer)}</Text>
+        </View>
+        <View style={{ flex: 1, alignItems: 'flex-end' }}>
+          <Text style={estilos.totRotulo}>Total em aberto</Text>
+          <Text style={[estilos.totValor, { color: cores.primariaEscura }]}>{formatarMoeda(vencido + aVencer)}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  function periodo() {
+    const ok = dataValida(de) && dataValida(ate);
+    const i = ok ? paraBanco(de)! : '';
+    const f = ok ? paraBanco(ate)! : '';
+    const invertido = ok && i > f;
+    const lst = ok && !invertido && abertos ? abertos.filter((t) => t.data_vencimento >= i && t.data_vencimento <= f) : [];
+    const hoje = hojeBanco();
+    const titulo = !ok ? 'Contas que vencem no período' : i === f ? (i === hoje ? 'Contas que vencem hoje' : `Contas que vencem em ${de}`) : `Contas que vencem de ${de} a ${ate}`;
+    return (
+      <View style={{ gap: 8 }}>
+        <Secao titulo="Vencimentos por período" />
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <View style={{ flex: 1 }}>
+            <CampoData rotulo="De" valor={de} aoMudar={setDe} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <CampoData rotulo="Até" valor={ate} aoMudar={setAte} />
+          </View>
+        </View>
+        {(de !== hojeBR() || ate !== hojeBR()) && (
+          <Botao titulo="Voltar para hoje" tipo="secundario" onPress={() => { setDe(hojeBR()); setAte(hojeBR()); }} />
+        )}
+        {invertido ? (
+          <Text style={estilos.dica}>A data final é anterior à inicial.</Text>
+        ) : !ok ? null : abertos === null ? (
+          <ActivityIndicator color={cores.primaria} style={{ marginTop: 8 }} />
+        ) : (
+          <>
+            <View style={estilos.resumo}>
+              <Text style={estilos.resumoTexto}>
+                {titulo} · {lst.length} {lst.length === 1 ? 'título' : 'títulos'}
+              </Text>
+              <Text style={estilos.resumoValor}>{formatarMoeda(lst.reduce((s, t) => s + saldoTitulo(t), 0))}</Text>
+            </View>
+            {lst.length === 0 ? <Text style={estilos.dica}>Nenhuma conta em aberto com vencimento {i === f ? 'nesta data' : 'neste período'}.</Text> : <Lista>{lst.map(linhaTitulo)}</Lista>}
+          </>
+        )}
+      </View>
+    );
+  }
 
   function corpo() {
     if (lista === null) return <ActivityIndicator color={cores.primaria} style={{ marginTop: 16 }} />;
@@ -224,6 +306,9 @@ export default function ConsultaTitulos({ tipo = 'pagar' }: { tipo?: TipoTitulo 
         </>
       ) : (
         <View style={{ gap: 10 }}>
+          {quadroTotais()}
+          {periodo()}
+          <Secao titulo="Outras relações" />
           {RELACOES.map((r) => (
             <Botao key={r.valor} titulo={r.rotulo} tipo="secundario" onPress={() => setRelacao(r.valor)} />
           ))}
@@ -239,6 +324,9 @@ const estilos = StyleSheet.create({
   resumo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, backgroundColor: cores.cartao, borderRadius: tam.raio, borderWidth: 1, borderColor: cores.borda, padding: 12 },
   resumoTexto: { flex: 1, fontSize: tam.pequeno + 1, color: cores.textoSuave, fontWeight: '600' },
   resumoValor: { fontSize: tam.subtitulo, fontWeight: '800', color: cores.primariaEscura },
+  totais: { flexDirection: 'row', backgroundColor: cores.cartao, borderRadius: tam.raio, borderWidth: 1, borderColor: cores.borda, padding: 12, gap: 8 },
+  totRotulo: { fontSize: tam.pequeno, color: cores.textoSuave, fontWeight: '600' },
+  totValor: { fontSize: tam.texto + 1, fontWeight: '800', color: cores.texto },
   mes: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   mesTexto: { fontSize: tam.subtitulo, fontWeight: '800', color: cores.texto, textTransform: 'capitalize' },
 });

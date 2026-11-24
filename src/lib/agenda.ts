@@ -27,7 +27,7 @@ export function podeAbrir(agendas: AgendaInfo[], a: AgendaRef): boolean {
   return agendas.some((x) => x.podeAbrir && chaveAgenda(x) === k);
 }
 
-export const ROTULO_AUTOR: Record<string, string> = { produtor: 'Anotação do produtor', escritorio: 'Anotação do escritório', gerente: 'Anotação do gerente' };
+export const ROTULO_AUTOR: Record<string, string> = { produtor: 'Anotação do produtor', escritorio: 'Anotação do escritório', gerente: 'Anotação do gerente', vaqueiro: 'Anotação do vaqueiro' };
 
 export type ItemAgenda = {
   chave: string;
@@ -60,6 +60,9 @@ export const TIPOS_AUTOMATICOS: Record<string, InfoTipo> = {
   troca_manga: { icone: 'swap-horizontal-outline', rotulo: 'Pasto', abrir: () => ({ rota: 'MovimentacaoForm', params: {} }) },
   sal: { icone: 'cube-outline', rotulo: 'Cocho de sal', abrir: (ref) => ({ rota: 'MangaDetalhe', params: { id: ref } }) },
   agua: { icone: 'water-outline', rotulo: 'Bebedouro', abrir: (ref) => ({ rota: 'MangaDetalhe', params: { id: ref } }) },
+  // V195: estimativa das mangas
+  pasto_lotacao: { icone: 'alert-circle-outline', rotulo: 'Pasto', abrir: (ref) => ({ rota: 'MangaDetalhe', params: { id: ref } }) },
+  pasto_ocupacao: { icone: 'swap-horizontal-outline', rotulo: 'Pasto', abrir: (ref) => ({ rota: 'MangaDetalhe', params: { id: ref } }) },
   adubacao: { icone: 'leaf-outline', rotulo: 'Adubação', abrir: (ref) => ({ rota: 'PlanoAdubacao', params: { id: ref } }) },
   // V117: tiradas do estoque, dos contratos de café e das pesagens
   estoque_baixo: { icone: 'file-tray-outline', rotulo: 'Estoque', abrir: (ref) => ({ rota: 'InsumoForm', params: { id: ref } }) },

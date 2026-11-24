@@ -3989,3 +3989,71 @@ O banco do Supabase JÁ FOI ATUALIZADO (não precisa rodar nada lá).
 - Depois de cadastrar, a tela fica pronta para o próximo cadastro, com aviso verde.
 - Em Mais, "Raças e ferros" virou dois itens: Raças e Ferros.
 - Quadro "Lotes ativos" do Início e "Por lote" em Animais abrem a consulta de lotes.
+
+---
+
+> As versões V154 a V202 não tiveram o LEIA-ME guardado aqui; o código abaixo já as inclui.
+
+# Fazenda Digital V203 (instale por cima da V202)
+
+Banco e servidor da NF-e: já atualizados direto no Supabase (nada a rodar). O arquivo banco\V203_banco.sql vai só para guardar.
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V203.
+
+## V203 · Venda de gado por itens
+- Mais › Vendas › Animais: a venda abre com o Item 1. Cada item tem as caixinhas lado a lado:
+  Pesagem nº (Puxar) · Qtde. · Sexo · Idade · Raça · Lote · Ferro · Brinco · Peso bruto kg ·
+  Desconto (% ou kg/cabeça) · Kg da @ · Preço/@ · Preço/kg bruto · Preço/cabeça.
+- Preço: digite em UMA das três caixas; as outras duas mostram o equivalente (a marcada com • é a que vale).
+- Com o nº do lote, sexo e idade vêm do lote e "Brinco" abre os animais para marcar.
+  Sem lote, informe sexo e idade: sai do rebanho (estoque) por faixa.
+- "Pesagem nº" + Puxar traz quantidade, peso, lote, sexo, raça, ferro e kg da @ da pesagem; complete o resto.
+- Abaixo de cada item: peso médio (kg e @), preço médio por cabeça e total do item.
+  No fim: totais da venda, Funrural e líquido.
+- "Item igual ao anterior" copia o item de cima (menos pesagem, brincos e peso). "Item em branco" abre um novo.
+- "O gado fica na fazenda": sai do nosso estoque e entra no estoque de terceiros do comprador.
+- Recebimento: À vista, Prazo em dias ou Data certa. Mesmo à vista vai para o Contas a receber
+  (vale para todas as vendas); o recebimento é feito em Financeiro › Contas a receber.
+- Ao gravar, pergunta se emite a NF-e agora.
+
+## Estoque de gado
+- A venda baixa o estoque Total.
+- A NF-e autorizada baixa o estoque Com GTA (cancelada, devolve).
+- NF emitida fora do sistema: informando nº da NF e GTA na venda, baixa os dois na hora (como antes).
+
+## NF-e de várias vendas
+- Mais › Notas fiscais › Emitir NF-e de vendas: digite um nº ou vários (ex.: 12, 13, 15).
+- Só junta vendas do mesmo cliente, da mesma fazenda emitente e para a mesma fazenda do cliente (mesma IE).
+- Na NF-e, cada item da venda vira um item da nota (sexo, faixa, raça, cabeças e valor próprios).
+- Venda com NF-e autorizada só se exclui depois de cancelar a nota.
+
+---
+
+# Fazenda Digital V204 (instale por cima da V203)
+
+## Como instalar
+1. Extraia este zip DIRETO em C:\FAZENDA_DIGITAL\app e escolha "Substituir".
+2. No CMD:
+   cd C:\FAZENDA_DIGITAL\app
+   npx expo export --platform web
+   Tem que terminar com "Exported: dist".
+3. Arraste a pasta dist no Netlify e aperte Ctrl+F5. A aba Mais deve mostrar V204.
+4. Banco: banco\V204_banco.sql (rodado direto no Supabase; se ainda não foi, rode no SQL Editor; pode rodar mais de uma vez).
+
+## V204 · Venda de gado
+- Caixinha "Brinco" ativa com ou sem lote.
+  Com lote: marca os animais do lote (como antes).
+  Sem lote: procura no rebanho da fazenda; digite o brinco (ou o número) e marque.
+  A quantidade, o sexo e a idade do item saem dos animais marcados.
+  Um item só aceita animais do mesmo sexo e da mesma faixa de idade (na nota, cada um é um item).
+- Nº da Nota Fiscal informado no início = NF já emitida fora do sistema:
+  - ao gravar, não pergunta se quer emitir a NF-e;
+  - a consulta da venda não mostra o botão "Emitir NF-e";
+  - "Emitir NF-e de vendas" recusa essa venda (o banco também bloqueia).
+  Assim não sai NF em duplicidade. Sem o nº, segue como antes: pergunta se emite agora ou depois.

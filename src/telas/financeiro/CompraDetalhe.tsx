@@ -41,7 +41,7 @@ export default function CompraDetalhe() {
           .select(
             '*, pessoa:pessoas ( nome ), comprador:documentos_comprador ( nome, cpf_cnpj ), conta:plano_contas ( nome ), tipo_desp:tipos_lancamento ( nome ), banco:contas_bancarias ( nome ),' +
               ' itens:compra_itens ( *, insumo:insumos ( nome, conteudo_medida, unidade_dose ) ), rateio:compra_rateios ( percentual, centro:centros_custo ( codigo, nome ) ),' +
-              ' parcelas:lancamentos ( parcela, valor, valor_pago, data_vencimento, situacao, data_pagamento )',
+              ' parcelas:lancamentos ( parcela, intermediaria, total_parcelas, valor, valor_pago, data_vencimento, situacao, data_pagamento )',
           )
           .eq('id', params.id)
           .single(),
@@ -72,7 +72,7 @@ export default function CompraDetalhe() {
 
   const itens = c.itens as any[];
   const somaItens = itens.reduce((s, i) => s + Number(i.valor_total ?? 0), 0);
-  const parcelas = ((c.parcelas as any[]) ?? []).sort((a, b) => a.parcela - b.parcela);
+  const parcelas = ((c.parcelas as any[]) ?? []).sort((a, b) => String(a.data_vencimento).localeCompare(String(b.data_vencimento)) || a.parcela - b.parcela);
   const custoNota = itens.reduce((s, i) => s + Number(i.custo_total ?? i.valor_total ?? 0), 0);
   const ligada = (x: any, rotulo: string) => (
     <Pressable key={x.id} onPress={() => navegacao.push('CompraDetalhe', { id: x.id })} style={({ pressed }) => [estilos.item, pressed && { opacity: 0.8 }]} accessibilityRole="button">
@@ -221,8 +221,8 @@ export default function CompraDetalhe() {
       <Dado rotulo="Forma" valor={c.pago_na_hora ? 'Paga na hora' : c.forma_pagamento === 'prazo' ? (c.tipo === 'despesa' ? 'A pagar' : 'A prazo / parcelado') : c.forma_pagamento === 'avista' ? 'À vista' : null} />
       {parcelas.map((p) => (
         <Dado
-          key={p.parcela}
-          rotulo={`${p.parcela}ª · vence ${doBanco(p.data_vencimento)}`}
+          key={`${p.intermediaria ? 'i' : 'n'}${p.parcela}`}
+          rotulo={`${p.intermediaria ? `Int. ${p.parcela}/${p.total_parcelas}` : `${p.parcela}ª`} · vence ${doBanco(p.data_vencimento)}`}
           valor={`${formatarMoeda(Number(p.valor))} · ${p.situacao === 'pago' ? `paga ${doBanco(p.data_pagamento)}` : p.situacao === 'cancelado' ? 'cancelada' : p.situacao === 'parcial' ? `paga em parte (${formatarMoeda(Number(p.valor_pago ?? 0))})` : 'em aberto'}`}
         />
       ))}

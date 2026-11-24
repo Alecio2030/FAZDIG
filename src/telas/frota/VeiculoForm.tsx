@@ -18,6 +18,7 @@ import ConsultaVeiculos from './ConsultaVeiculos';
 import { useSessao } from '../../contexto/SessaoContext';
 import { consulta, supabase, traduzirErro } from '../../lib/supabase';
 import { centroDaUnidade } from '../../lib/unidades';
+import { codigoBem } from '../../lib/frota';
 import { dataValida, doBanco, hojeBR, paraBanco } from '../../lib/datas';
 import { agruparDigitacao, lerNumero, numeroParaCampo } from '../../lib/formatos';
 import { perguntar } from '../../lib/perguntar';
@@ -63,6 +64,7 @@ export default function VeiculoForm() {
   const [centroId, setCentroId] = useState<string | null>(null);
   const [responsavelId, setResponsavelId] = useState<string | null>(null);
   const [imobId, setImobId] = useState<string | null>(null);
+  const [bemTxt, setBemTxt] = useState<string | null>(null);
   const [medidor, setMedidor] = useState<string[]>(['km']);
   const [leitura, setLeitura] = useState('');
   const [dataLeitura, setDataLeitura] = useState(hojeBR());
@@ -101,6 +103,7 @@ export default function VeiculoForm() {
     setCentroId(null);
     setResponsavelId(null);
     setImobId(null);
+    setBemTxt(null);
     setMedidor(['km']);
     setLeitura('');
     setDataLeitura(hojeBR());
@@ -120,7 +123,7 @@ export default function VeiculoForm() {
     setErro(null);
     try {
       const [v, ps, ab, ma] = await Promise.all([
-        consulta<any>(supabase.from('frota_veiculos').select('*').eq('id', vid).single()),
+        consulta<any>(supabase.from('frota_veiculos').select('*, bem:imobilizados ( numero, codigo_patrimonial, nome )').eq('id', vid).single()),
         consulta<any[]>(supabase.from('frota_planos').select('*').eq('veiculo_id', vid).order('ordem').order('created_at')),
         consulta<any[]>(supabase.from('frota_abastecimentos').select('id').eq('veiculo_id', vid).limit(1)),
         consulta<any[]>(supabase.from('frota_manutencoes').select('id').eq('veiculo_id', vid).limit(1)),
@@ -141,6 +144,8 @@ export default function VeiculoForm() {
       setCentroId(v.centro_custo_id);
       setResponsavelId(v.responsavel_id);
       setImobId(v.imobilizado_id);
+      const b = Array.isArray(v.bem) ? v.bem[0] : v.bem;
+      setBemTxt(b ? `${b.codigo_patrimonial ?? ''} · Bem nº ${b.numero} – ${b.nome}`.replace(/^ · /, '') : null);
       setMedidor([v.medidor]);
       setLeitura(numeroParaCampo(v.leitura_inicial));
       setDataLeitura(doBanco(v.data_leitura_inicial));
@@ -176,18 +181,14 @@ export default function VeiculoForm() {
 
   // ---- listas ----
   const carregarVeiculos = useCallback(async (): Promise<ItemLista[]> => {
-    const d = await consulta<any[]>(supabase.from('frota_veiculos').select('id, numero, nome, tipo, placa, ativo').order('nome'));
-    return d.map((v) => ({ id: v.id, titulo: `Nº ${v.numero} · ${v.nome}`, detalhe: [ROTULO_TIPO_VEICULO[v.tipo], v.placa, v.ativo ? null : 'fora de uso'].filter(Boolean).join(' · ') }));
-  }, []);
+    // V165: na Frota só os bens do Imobilizado marcados "Controlar na Frota"
+    // V169: o que é de uma fazenda só aparece nela
+    const d = await consulta<any[]>(supabase.from('frota_veiculos').select('id, numero, nome, tipo, placa, ativo, bem:imobilizados ( codigo_patrimonial )').not('imobilizado_id', 'is', null).eq('fazenda_id', fid).order('nome'));
+    return d.map((v) => ({ id: v.id, titulo: `${codigoBem(v) ?? `Nº ${v.numero}`} · ${v.nome}`, detalhe: [ROTULO_TIPO_VEICULO[v.tipo], v.placa, v.ativo ? null : 'fora de uso'].filter(Boolean).join(' · ') }));
+  }, [fid]);
   const carregarCentros = useCallback(async (): Promise<ItemLista[]> => {
     const d = await consulta<any[]>(supabase.from('centros_custo').select('id, codigo, nome, fazenda_id').eq('ativo', true).order('codigo'));
     return d.filter((c) => centroDaUnidade(c, (fazendaDoVeiculo ?? fid))).map((c) => ({ id: c.id, titulo: `${c.codigo ?? ''} ${c.nome}`.trim() }));
-  }, [fid, fazendaDoVeiculo]);
-  const carregarBens = useCallback(async (): Promise<ItemLista[]> => {
-    const d = await consulta<any[]>(
-      supabase.from('imobilizados').select('id, numero, nome, categoria').eq('fazenda_id', fazendaDoVeiculo ?? fid).eq('situacao', 'ativo').eq('metodo', 'depreciacao').order('numero'),
-    );
-    return d.map((b) => ({ id: b.id, titulo: `Bem nº ${b.numero} · ${b.nome}`, detalhe: b.categoria }));
   }, [fid, fazendaDoVeiculo]);
 
   // ---- tipo: sugere o medidor e, sem plano ainda, o plano padrão ----
@@ -257,7 +258,7 @@ export default function VeiculoForm() {
     setErros(e);
     const lista = Object.values(e);
     if (lista.length) return setErro(lista.length === 1 ? lista[0] : `Falta corrigir:\n• ${lista.join('\n• ')}`);
-    if (!fid) return setErro('Escolha a fazenda ativa.');
+    if (!id) return setErro('Bem novo se cadastra pelo Imobilizado.');
 
     const dados = {
       nome: nome.trim(),
@@ -277,22 +278,15 @@ export default function VeiculoForm() {
       centro_custo_id: centroId,
       proprietario: uso[0] === 'particular' ? proprietario.trim() || null : null,
       responsavel_id: responsavelId,
-      imobilizado_id: imobId,
       seguro_vencimento: seguro.trim() ? paraBanco(seguro) : null,
       ativo,
       observacoes: obs.trim() || null,
     };
     setSalvando(true);
     try {
-      let vid = id;
-      let faz = fazendaDoVeiculo ?? fid;
-      if (vid) await consulta(supabase.from('frota_veiculos').update(dados).eq('id', vid).select('id').single());
-      else {
-        const r = await consulta<any>(supabase.from('frota_veiculos').insert({ ...dados, fazenda_id: fid }).select('id, numero').single());
-        vid = r.id;
-        faz = fid;
-        setNumero(r.numero);
-      }
+      const vid = id;
+      const faz = fazendaDoVeiculo ?? fid;
+      await consulta(supabase.from('frota_veiculos').update(dados).eq('id', vid!).select('id').single());
       // plano: apaga os tirados, grava os outros na ordem da tela
       if (apagados.length) await consulta(supabase.from('frota_planos').delete().in('id', apagados));
       for (let i = 0; i < plano.length; i++) {
@@ -363,16 +357,25 @@ export default function VeiculoForm() {
 
       {id ? (
         <View style={estilos.cabecalho}>
-          <Text style={estilos.numero}>Nº {numero}</Text>
+          <Text style={estilos.numero}>{bemTxt ? bemTxt.split(' · ')[0] : `Nº ${numero}`}</Text>
           {!veioDeFora && (
             <Text style={estilos.link} onPress={limpar}>
-              Sair deste e cadastrar outro
+              Sair deste veículo
             </Text>
           )}
         </View>
       ) : (
-        <SeletorLista rotulo="Alterar um veículo já cadastrado" valorId={null} aoMudar={(v) => v && abrir(v)} carregar={carregarVeiculos} dicaBusca="Nome ou placa" vazio="Nenhum veículo cadastrado." />
+        <>
+          <SeletorLista rotulo="Abrir um veículo da Frota" valorId={null} aoMudar={(v) => v && abrir(v)} carregar={carregarVeiculos} dicaBusca="Nome, placa ou código" vazio="Nenhum veículo na Frota." />
+          <Aviso
+            tipo="info"
+            texto={'Veículo, trator, máquina ou equipamento novo se cadastra no Imobilizado, marcando "Controlar na Frota?". Assim ele já nasce com o código do bem e a depreciação, e aparece aqui sozinho.'}
+          />
+          <Botao titulo="Cadastrar no Imobilizado" onPress={() => navegacao.navigate('ImobilizadoForm', { aba: 'cadastrar' })} />
+        </>
       )}
+      {id && (
+        <>
 
       <Secao titulo="Identificação" />
       <Campo rotulo="Nome *" value={nome} onChangeText={setNome} autoCapitalize="sentences" placeholder="Ex.: Hilux branca, Trator JD 6110J, Motobomba do poço" erro={erros.nome} />
@@ -433,14 +436,10 @@ export default function VeiculoForm() {
       <Escolha rotulo="Combustível" opcoes={COMBUSTIVEIS} valor={combustivel} aoMudar={(v) => setCombustivel(combustivel[0] === v[0] ? [] : v)} />
       <Campo rotulo="Tanque (litros)" value={tanque} onChangeText={(t) => setTanque(agruparDigitacao(t))} keyboardType="decimal-pad" placeholder="Opcional" erro={erros.tanque} />
 
-      <Secao titulo="Documentos e ligação com o Imobilizado" />
+      <Secao titulo="Documentos e Imobilizado" />
       <CampoData rotulo="Seguro vence em" valor={seguro} aoMudar={setSeguro} erro={erros.seguro} />
-      {uso[0] !== 'particular' && (
-        <>
-          <SeletorLista rotulo="Bem do Imobilizado (opcional)" valorId={imobId} aoMudar={setImobId} carregar={carregarBens} permitirLimpar vazio="Nenhum bem com depreciação nesta fazenda." />
-          <Text style={estilos.nota}>Ligado ao bem, a ficha do veículo oferece levar o consumo real (litros por hora) para o custo por hora que vai às Atividades.</Text>
-        </>
-      )}
+      <Text style={estilos.bem}>{bemTxt ? `Imobilizado: ${bemTxt}` : 'Sem bem no Imobilizado.'}</Text>
+      <Text style={estilos.nota}>Valor, depreciação, transferência e baixa ficam no Imobilizado. O nome e a fazenda vêm de lá; dando baixa no bem, ele sai de uso aqui.</Text>
 
       <Secao titulo="Plano de manutenção" />
       <Text style={estilos.nota}>
@@ -495,8 +494,10 @@ export default function VeiculoForm() {
       {id && <Interruptor rotulo="Em uso" descricao="Fora de uso (vendido, sucateado) não aparece nos lançamentos nem nos avisos. O histórico fica guardado." valor={ativo} aoMudar={setAtivo} />}
       <Campo rotulo="Observações" value={obs} onChangeText={setObs} multiline style={{ minHeight: 72, paddingTop: 12, textAlignVertical: 'top' }} />
 
-      <Botao titulo={id ? 'Salvar alterações' : 'Cadastrar'} onPress={salvar} carregando={salvando} />
-      {id && <Botao titulo="Excluir" tipo="perigo" onPress={excluir} />}
+      <Botao titulo="Salvar alterações" onPress={salvar} carregando={salvando} />
+      <Botao titulo="Excluir da Frota" tipo="perigo" onPress={excluir} />
+        </>
+      )}
     </Tela>
   );
 }
@@ -508,6 +509,7 @@ const estilos = StyleSheet.create({
   numero: { fontSize: tam.subtitulo, fontWeight: '800', color: cores.cafe },
   link: { fontSize: tam.pequeno + 1, color: cores.primaria, fontWeight: '700' },
   nota: { fontSize: tam.pequeno, color: cores.textoSuave, lineHeight: 19 },
+  bem: { fontSize: tam.texto, fontWeight: '700', color: cores.primariaEscura },
   erro: { fontSize: tam.pequeno + 1, fontWeight: '600', color: cores.erro },
   item: { backgroundColor: cores.cartao, borderRadius: tam.raio, borderWidth: 1, borderColor: cores.borda, padding: 10, gap: 8 },
   itemTopo: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
